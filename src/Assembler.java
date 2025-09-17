@@ -46,6 +46,13 @@ public class Assembler {
     private List<String> readSourceFile(String filePath) throws FileNotFoundException {
         // To be implemented
         return new ArrayList<>();
+        List<String> lines = new ArrayList<>();
+        Scanner sc = new Scanner(new File(filePath));
+        while (sc.hasNextLine()) {
+            lines.add(sc.nextLine());
+        }
+        sc.close();
+        return lines;
     }
 
     /**
