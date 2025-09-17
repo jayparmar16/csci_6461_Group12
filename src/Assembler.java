@@ -1,7 +1,6 @@
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Scanner;
@@ -69,55 +68,78 @@ public class Assembler {
      */
     private boolean passOne(List<String> sourceLines) {
         int locationCounter = 0;
-        boolean hasErrors = false;
+        boolean[] hasErrors = {false};
 
-        for (String line : sourceLines) {
-            String cleanLine = removeComments(line).trim();
-            if (cleanLine.isEmpty()) continue;
+        for (String raw : sourceLines) {
+            String line = cleanLine(raw);
+            if (line.isEmpty()) continue;
 
-            List<String> tokens = new ArrayList<>(Arrays.asList(cleanLine.split("\\s+")));
+            String[] tokens = line.split("\\s+");
+            if (tokens.length == 0) continue;
 
-            String label = null;
-            if (tokens.get(0).contains(":")) {
-                String[] parts = tokens.get(0).split(":", 2);
-                label = parts[0];
-                tokens.remove(0);
-                if (parts.length > 1 && !parts[1].isEmpty()) {
-                    tokens.add(0, parts[1]);
+            int idx = handleLabel(tokens, locationCounter, hasErrors);
+            if (idx == -1 || idx >= tokens.length) continue;
+
+            String instruction = tokens[idx].toUpperCase();
+
+            switch (instruction) {
+                case "LOC" -> {
+                    if (idx + 1 >= tokens.length) {
+                        System.err.println("Error: Missing argument for LOC directive.");
+                        hasErrors[0] = true;
+                    } else {
+                        try {
+                            locationCounter = Integer.parseInt(tokens[idx + 1]);
+                        } catch (NumberFormatException e) {
+                            System.err.println("Error: Invalid number for LOC directive.");
+                            hasErrors[0] = true;
+                        }
+                    }
                 }
-            } else if (tokens.size() > 1 && tokens.get(1).equals(":")) {
-                label = tokens.get(0);
-                tokens.remove(0);
-                tokens.remove(0);
-            }
-
-            if (label != null) {
-                if (symbolTable.containsKey(label)) {
-                    System.err.println("Error: Duplicate label '" + label + "' found.");
-                    hasErrors = true;
-                } else {
-                    symbolTable.put(label, locationCounter);
-                }
-            }
-
-            if (tokens.isEmpty()) {
-                continue;
-            }
-
-            String instruction = tokens.get(0).toUpperCase();
-
-            if (instruction.equals("LOC")) {
-                try {
-                    locationCounter = Integer.parseInt(tokens.get(1));
-                } catch (NumberFormatException e) {
-                    System.err.println("Error: Invalid number for LOC directive.");
-                    hasErrors = true;
-                }
-            } else {
-                locationCounter++;
+                default -> locationCounter++;
             }
         }
-        return !hasErrors;
+        return !hasErrors[0];
+    }
+
+    /**
+     * Cleans a source line: removes comments and trims whitespace.
+     */
+    private String cleanLine(String line) {
+        return removeComments(line).trim();
+    }
+
+    /**
+     * Handles label detection and updates the symbol table.
+     *
+     * @return index of the next token after label, or -1 if duplicate label error.
+     */
+    private int handleLabel(String[] tokens, int locationCounter, boolean[] hasErrors) {
+        int index = 0;
+        String label = null;
+
+        if (tokens[index].contains(":")) {
+            String[] parts = tokens[index].split(":", 2);
+            label = parts[0];
+            index++;
+            if (parts.length > 1 && !parts[1].isEmpty()) {
+                tokens[index - 1] = parts[1];
+                index--;
+            }
+        } else if (tokens.length > 1 && tokens[1].equals(":")) {
+            label = tokens[0];
+            index = 2;
+        }
+
+        if (label != null) {
+            if (symbolTable.containsKey(label)) {
+                System.err.println("Error: Duplicate label '" + label + "' found.");
+                hasErrors[0] = true;
+                return -1;
+            }
+            symbolTable.put(label, locationCounter);
+        }
+        return index;
     }
 
     /**
