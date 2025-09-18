@@ -7,6 +7,7 @@ import java.util.Scanner;
 
 public class Assembler {
 
+    //Comment to check 
     private final HashMap<String, Integer> symbolTable;
 
     /**
