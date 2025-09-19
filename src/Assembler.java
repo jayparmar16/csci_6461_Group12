@@ -1,5 +1,6 @@
 import java.io.File;
 import java.io.FileNotFoundException;
+import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -23,8 +24,10 @@ public class Assembler {
     */
     public void assemble(String inputFilePath) {
          try {
+            // Read all lines from the source file into memory
             List<String> sourceLines = readSourceFile(inputFilePath);
 
+            // Execute Pass 1 to build the symbol table
             System.out.println("Starting Pass 1...");
             boolean pass1Success = passOne(sourceLines);
             if (!pass1Success) {
@@ -34,10 +37,15 @@ public class Assembler {
             System.out.println("Pass 1 Complete. Symbol Table:");
             symbolTable.forEach((key, value) -> System.out.println("  " + key + ": " + value));
 
+            // Execute Pass 2 to generate the machine code and output files
             System.out.println("\nStarting Pass 2...");
             passTwo(sourceLines, inputFilePath);
             System.out.println("Pass 2 Complete.");
+            System.out.println("Assembly finished successfully!");
+            System.out.println("Output files 'listing_output.txt' and 'load_file.txt' have been created.");
 
+        } catch (FileNotFoundException e) {
+            System.err.println("Error: Input file not found: " + inputFilePath);
         } catch (Exception e) {
             System.err.println("An error occurred during processing: " + e.getMessage());
             e.printStackTrace();
@@ -117,12 +125,17 @@ public class Assembler {
     * @param inputFilePath The original file path, used to create output files in the same directory.
     */
     private void passTwo(List<String> sourceLines, String inputFilePath) throws Exception {
+        File inputFile = new File(inputFilePath);
+        String outputDir = inputFile.getParent();
+        PrintWriter listingWriter = new PrintWriter(new File(outputDir, "listing_output.txt"));
+        PrintWriter loadWriter = new PrintWriter(new File(outputDir, "load_file.txt"));
+
         int locationCounter = 0;
 
         for (String originalLine : sourceLines) {
             String cleanLine = removeComments(originalLine).trim();
             if (cleanLine.isEmpty()) {
-                System.out.println(originalLine); // Print empty lines for now
+                listingWriter.println(originalLine);
                 continue;
             }
 
@@ -141,6 +154,7 @@ public class Assembler {
             }
             
             if (tokens.isEmpty()) {
+                 listingWriter.println(String.format("%06o %-8s %s", locationCounter, "", originalLine));
                  continue;
             }
 
@@ -151,6 +165,7 @@ public class Assembler {
             if (instruction.equals("LOC")) {
                 locationCounter = Integer.parseInt(tokens.get(1));
                 generatesCode = false;
+                listingWriter.println("       " + originalLine);
             } else if (instruction.equals("DATA")) {
                 String valueStr = tokens.get(1);
                 
@@ -159,6 +174,7 @@ public class Assembler {
                 } else {
                     machineCode = Integer.parseInt(valueStr);
                 }
+
                 locationCounter++;
             } else if (ISA.isInstruction(instruction)) {
                 try {
@@ -174,9 +190,14 @@ public class Assembler {
             }
             
             if (generatesCode) {
-                System.out.printf("%06o %06o %s%n", currentPc, machineCode, originalLine);
+                String octalLocation = String.format("%06o", currentPc);
+                String octalMachineCode = String.format("%06o", machineCode);
+                listingWriter.printf("%s %s %s%n", octalLocation, octalMachineCode, originalLine);
+                loadWriter.printf("%s %s%n", octalLocation, octalMachineCode);
             }
         }
+        listingWriter.close();
+        loadWriter.close();
     }
     
     /**
@@ -191,13 +212,10 @@ public class Assembler {
         if (opcode == null) {
             throw new IllegalArgumentException("Invalid instruction : " + instruction);
         }
-
         int r = 0, ix = 0, i = 0, address = 0;
         int rx = 0, ry = 0;
         int count = 0, lr = 0, al = 0, devId = 0;
-        
         String[] operands = (tokens.size() > 1) ? tokens.get(1).split(",") : new String[0];
-
         switch(instruction) {
             case "LDR": case "STR": case "LDA": case "LDX": case "STX":
             case "JZ": case "JNE": case "JCC": case "JMA": case "JSR":
@@ -219,7 +237,6 @@ public class Assembler {
                     if (parts.length > 3) i = Integer.parseInt(parts[3]);
                 }
                 return (opcode << 10) | (r << 8) | (ix << 6) | (i << 5) | address;
-
             case "AIR": case "SIR":
                 r = Integer.parseInt(operands[0]);
                 address = Integer.parseInt(operands[1]);
@@ -227,7 +244,6 @@ public class Assembler {
             case "RFS":
                 address = Integer.parseInt(operands[0]);
                 return (opcode << 10) | address;
-
             case "MLT": case "DVD": case "TRR": case "AND": case "ORR":
                 rx = Integer.parseInt(operands[0]);
                 ry = Integer.parseInt(operands[1]);
@@ -235,22 +251,18 @@ public class Assembler {
             case "NOT":
                 rx = Integer.parseInt(operands[0]);
                 return (opcode << 10) | (rx << 8);
-
             case "SRC": case "RRC":
                 r = Integer.parseInt(operands[0]);
                 count = Integer.parseInt(operands[1]);
                 lr = Integer.parseInt(operands[2]);
                 al = (instruction.equals("SRC")) ? Integer.parseInt(operands[3]) : 0;
                 return (opcode << 10) | (r << 8) | (al << 7) | (lr << 6) | count;
-
             case "IN": case "OUT": case "CHK":
                 r = Integer.parseInt(operands[0]);
                 devId = Integer.parseInt(operands[1]);
                 return (opcode << 10) | (r << 8) | devId;
-
             case "HLT":
                 return opcode;
-                
             default:
                  throw new IllegalArgumentException("Unsupported instruction in buildMachineCode: " + instruction);
         }
@@ -268,5 +280,3 @@ public class Assembler {
         return line;
     }
 }
-
-
