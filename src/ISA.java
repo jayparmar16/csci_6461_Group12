@@ -7,23 +7,42 @@ import java.util.Map;
  */
 public final class ISA {
     private static final Map<String, Integer> OPCODES = new HashMap<>();
+    
+    public static int octal(String oct) {
+        return Integer.parseInt(oct, 8);
+    }
 
     static {
-        OPCODES.put("HLT", 0b000000); OPCODES.put("TRAP", 0b011000);
-        OPCODES.put("LDR", 0b000001); OPCODES.put("STR", 0b000010);
-        OPCODES.put("LDA", 0b000011); OPCODES.put("LDX", 0b100001);
-        OPCODES.put("STX", 0b100010); OPCODES.put("JZ",  0b001000);
-        OPCODES.put("JNE", 0b001001); OPCODES.put("JCC", 0b001010);
-        OPCODES.put("JMA", 0b001011); OPCODES.put("JSR", 0b001100);
-        OPCODES.put("RFS", 0b001101); OPCODES.put("SOB", 0b001110);
-        OPCODES.put("JGE", 0b001111); OPCODES.put("AMR", 0b000100);
-        OPCODES.put("SMR", 0b000101); OPCODES.put("AIR", 0b000110);
-        OPCODES.put("SIR", 0b000111); OPCODES.put("MLT", 0b011100);
-        OPCODES.put("DVD", 0b011101); OPCODES.put("TRR", 0b011110);
-        OPCODES.put("AND", 0b011111); OPCODES.put("ORR", 0b100000);
-        OPCODES.put("NOT", 0b100001); OPCODES.put("SRC", 0b011001);
-        OPCODES.put("RRC", 0b011010); OPCODES.put("IN",  0b110001);
-        OPCODES.put("OUT", 0b110010); OPCODES.put("CHK", 0b110011);
+        OPCODES.put("HLT", octal("00")); // Halts program execution.
+        OPCODES.put("TRAP", octal("30")); // Executes a system trap routine.
+        OPCODES.put("LDR", octal("01")); // Loads a general-purpose register from memory.
+        OPCODES.put("STR", octal("02")); // Stores a general-purpose register to memory.
+        OPCODES.put("LDA", octal("03")); // Loads a register with a memory address.
+        OPCODES.put("LDX", octal("41")); // Loads an index register from memory.
+        OPCODES.put("STX", octal("42")); // Stores an index register to memory.
+        OPCODES.put("JZ", octal("10"));  // Jumps to an address if a register's value is zero.
+        OPCODES.put("JNE", octal("11")); // Jumps if a register's value is not zero.
+        OPCODES.put("JCC", octal("12")); // Jumps if a specific condition code bit is set.
+        OPCODES.put("JMA", octal("13")); // Jumps unconditionally to an address.
+        OPCODES.put("JSR", octal("14")); // Jumps to a subroutine, saving the return address.
+        OPCODES.put("RFS", octal("15")); // Returns from a subroutine.
+        OPCODES.put("SOB", octal("16")); // Decrements a register and branches if the result is not zero.
+        OPCODES.put("JGE", octal("17")); // Jumps if a register's value is greater than or equal to zero.
+        OPCODES.put("AMR", octal("04")); // Adds a value from memory to a register.
+        OPCODES.put("SMR", octal("05")); // Subtracts a value from memory from a register.
+        OPCODES.put("AIR", octal("06")); // Adds an immediate value to a register.
+        OPCODES.put("SIR", octal("07")); // Subtracts an immediate value from a register.
+        OPCODES.put("MLT", octal("70")); // Multiplies two registers.
+        OPCODES.put("DVD", octal("71")); // Divides one register by another.
+        OPCODES.put("TRR", octal("72")); // Tests for equality between two registers.
+        OPCODES.put("AND", octal("73")); // Performs a bitwise AND operation on two registers.
+        OPCODES.put("ORR", octal("74")); // Performs a bitwise OR operation on two registers.
+        OPCODES.put("NOT", octal("75")); // Performs a bitwise NOT on a single register.
+        OPCODES.put("SRC", octal("31")); // Shifts the bits in a register.
+        OPCODES.put("RRC", octal("32")); // Rotates the bits in a register.
+        OPCODES.put("IN", octal("61"));  // Inputs a character from a device into a register.
+        OPCODES.put("OUT", octal("62")); // Outputs a character from a register to a device.
+        OPCODES.put("CHK", octal("63")); // Checks the status of a device.
     }
 
     private ISA() {} // Prevents instantiation

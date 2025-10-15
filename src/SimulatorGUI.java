@@ -363,6 +363,15 @@ public class SimulatorGUI extends JFrame {
         return panel;
     }
 
+    public void appendToPrinter(String text) {
+        printerArea.append(text + "\n");
+        printerArea.setCaretPosition(printerArea.getDocument().getLength());
+    }
+    
+    public void clearPrinter() {
+        printerArea.setText("");
+    }
+
     private JPanel createBottomPanel() {
         JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT));
         panel.add(new JLabel("Program File"));

@@ -129,20 +129,15 @@ public class CPU {
     }
 
     private void updateDisplayAndLog() {
-        System.out.println("\nStatus after instruction execution:");
-        System.out.printf("PC: %06o   MAR: %06o   MBR: %06o   IR: %06o\n", 
-                        pc, mar, mbr, ir);
-        
-        System.out.println("\nGeneral Purpose Registers:");
-        for (int i = 0; i < 4; i++) {
-            System.out.printf("GPR%d: %06o   ", i, gpr[i]);
-        }
-        
-        System.out.println("\nIndex Registers:");
-        for (int i = 1; i < 4; i++) {
-            System.out.printf("IXR%d: %06o   ", i, ixr[i]);
-        }
-        System.out.println();
+        String status = String.format("\nRegisters after execution:\n" +
+                                    "PC: %06o  MAR: %06o  MBR: %06o  IR: %06o\n" +
+                                    "GPRs: %06o  %06o  %06o  %06o\n" +
+                                    "IXRs: %06o  %06o  %06o\n",
+                                    pc, mar, mbr, ir,
+                                    gpr[0], gpr[1], gpr[2], gpr[3],
+                                    ixr[1], ixr[2], ixr[3]);
+        gui.appendToPrinter(status);
+        gui.updateAllDisplays();
     }
 
     public void load(short address) {
@@ -181,22 +176,35 @@ public class CPU {
         // 2. Increment PC for next instruction
         pc++;
         
-        // 3. Decode instruction fields
-        int opcode = (ir >> 10) & 0b111111;   // Bits 15-10
-        int r = (ir >> 8) & 0b11;             // Bits 9-8
-        int ix = (ir >> 6) & 0b11;            // Bits 7-6
-        int i = (ir >> 5) & 0b1;              // Bit 5
-        int address = ir & 0b11111;           // Bits 4-0
+        // Decode instruction fields
+        // For instruction 000012:
+        // opcode = 00 (bits 15-10)
+        // r = 0 (bits 9-8)
+        // ix = 0 (bits 7-6)
+        // i = 1 (bit 5)
+        // address = 2 (bits 4-0)
+        int opcode = (ir >> 10) & 0x3F;  // bits 15-10
+        int r = (ir >> 8) & 0x3;         // bits 9-8
+        int ix = (ir >> 6) & 0x3;        // bits 7-6
+        int i = (ir >> 5) & 0x1;         // bit 5
+        int address = ir & 0x1F;         // bits 4-0
         
-        System.out.printf("Executing instruction at PC = %06o: %06o\n", mar, ir);
-        System.out.printf("Decoded - Opcode: %02o, R: %d, IX: %d, I: %d, Address: %05o\n", 
-                        opcode, r, ix, i, address);
+        // Log instruction details
+        gui.appendToPrinter("=== Instruction Execution ===");
+        gui.appendToPrinter(String.format("Location: %06o  Instruction: %06o", mar, ir));
+        gui.appendToPrinter("Decoded fields (octal):");
+        gui.appendToPrinter(String.format("  Opcode: %02o", opcode));
+        gui.appendToPrinter(String.format("  R: %01o", r));
+        gui.appendToPrinter(String.format("  IX: %01o", ix));
+        gui.appendToPrinter(String.format("  I: %01o", i));
+        gui.appendToPrinter(String.format("  Address: %01o", address));
         
         // 4. Execute based on opcode
         int effectiveAddr = address;
         if (ix != 0) {
             effectiveAddr += ixr[ix];
-            System.out.printf("Using IXR%d (%06o) for address calculation\n", ix, ixr[ix]);
+            gui.appendToPrinter(String.format("Using IX%d: %06o + %06o = %06o",
+                              ix, address, ixr[ix], effectiveAddr));
         }
         if (i == 1) {
             if (!checkMemoryFault((short)effectiveAddr)) {
@@ -207,11 +215,16 @@ public class CPU {
             }
         }
         System.out.printf("Effective Address: %06o\n", effectiveAddr);
-        
+
+        // Log the raw instruction value for debugging
+        gui.appendToPrinter(String.format("Raw instruction value: %06o", ir));
+        gui.appendToPrinter(String.format("Decoded opcode: %02o", opcode));
+
         switch(opcode) {
             case 0: // HLT
-                System.out.println("HALT instruction - Stopping machine");
+                gui.appendToPrinter("HLT - Halting machine");
                 halt();
+                gui.appendToPrinter("Machine halted - Press IPL to reset");
                 break;
                 
             case 1: // LDR
@@ -508,14 +521,15 @@ public class CPU {
 
     public void singleStep() {
         if (isHalted) {
-            System.out.println("Machine is halted. Press IPL to restart.");
+            gui.appendToPrinter("Machine is halted. Press IPL to restart.");
             return;
         }
 
         try {
+            gui.appendToPrinter("\n=== Single Step Execution ===");
             executeInstruction();
         } catch (Exception e) {
-            System.err.println("Error executing instruction: " + e.getMessage());
+            gui.appendToPrinter("ERROR: " + e.getMessage());
             mfr = FAULT_ILLEGAL_OPERATION;
             halt();
             gui.showError("Execution Error", "Failed to execute instruction: " + e.getMessage());
@@ -531,19 +545,28 @@ public class CPU {
     }
 
     private boolean checkMemoryFault(int address) {
+        // First check for out of bounds memory access
         if (address < 0 || address > 2047) {
             mfr = FAULT_ILLEGAL_MEM_ADDR;
             halt();
-            System.out.println("ERROR: Illegal Memory Address: " + address);
-            gui.showError("Memory Fault", "Illegal Memory Address to Non-existent Location (address must be 0-2047).");
+            gui.appendToPrinter("ERROR: Illegal Memory Address: " + address);
+            gui.showError("Memory Fault", "Illegal Memory Address to Non-existent Location (address must be 0-2047)");
             return true;
         }
+
+        // For loading programs, we need to check if we're writing to reserved memory
         if (address >= RESERVED_MEM_START && address <= RESERVED_MEM_END) {
-            mfr = FAULT_RESERVED_LOCATION;
-            halt();
-            System.out.println("ERROR: Reserved Memory Access: " + address);
-            gui.showError("Memory Fault", "Illegal Memory Access to Reserved Location (0-5).");
-            return true;
+            String purpose;
+            switch (address) {
+                case 0 -> purpose = "Trap Instruction Vector Table";
+                case 1 -> purpose = "Machine Fault Handler Address";
+                case 2 -> purpose = "Trap PC Storage";
+                case 3 -> purpose = "Reserved (Not Used)";
+                case 4 -> purpose = "Machine Fault PC Storage";
+                case 5 -> purpose = "Reserved (Not Used)";
+                default -> purpose = "Reserved";
+            }
+            gui.appendToPrinter(String.format("WARNING: Accessing Reserved Location %d (%s)", address, purpose));
         }
         return false;
     }
