@@ -16,18 +16,18 @@ public class SimulatorGUI extends JFrame {
     // GUI Components
     private final JTextField[] gprTextFields = new JTextField[4];
     private final JTextField[] ixrTextFields = new JTextField[3];
-    private final JTextField pcTextField = new JTextField(8);
-    private final JTextField marTextField = new JTextField(8);
-    private final JTextField mbrTextField = new JTextField(8);
-    private final JTextField irTextField = new JTextField(8);
+    private final JTextField pcTextField = new JTextField(12);
+    private final JTextField marTextField = new JTextField(12);
+    private final JTextField mbrTextField = new JTextField(12);
+    private final JTextField irTextField = new JTextField(12);
     private final JTextField ccTextField = new JTextField(4);
     private final JTextField mfrTextField = new JTextField(4);
     private final JTextField binaryDisplayField = new JTextField(20);
-    private final JTextField octalInputField = new JTextField(8);
+    private final JTextField octalInputField = new JTextField(12);
     private final JTextArea cacheContentArea = new JTextArea(25, 40);
-    private final JTextArea printerArea = new JTextArea(10, 35);
-    private final JTextField consoleInputTextField = new JTextField(35);
-    private final JTextField programFileTextField = new JTextField(25);
+    private final JTextArea printerArea = new JTextArea(10, 45);
+    private final JTextField consoleInputTextField = new JTextField(45);
+    // The programFileTextField is no longer needed here as IPL will handle file selection.
 
     public SimulatorGUI() {
         this.cpu = new CPU(this);
@@ -43,11 +43,12 @@ public class SimulatorGUI extends JFrame {
 
         pack();
         setLocationRelativeTo(null);
-        cpu.ipl(); // Perform initial reset on startup
+        cpu.resetMachine(); // Perform initial reset on startup
+        updateAllDisplays();
     }
 
     private void setupComponents() {
-        setPreferredSize(new Dimension(800, 600));
+        setPreferredSize(new Dimension(900, 600));
         getContentPane().setBackground(new Color(200, 220, 240));
         
         GridBagConstraints gbc = new GridBagConstraints();
@@ -92,7 +93,8 @@ public class SimulatorGUI extends JFrame {
         gbc.gridheight = 1;
         gbc.weightx = 0.6;
         gbc.weighty = 0.1;
-        add(createBottomPanel(), gbc);
+        // The bottom panel is no longer needed.
+        // add(createBottomPanel(), gbc);
     }
 
     private JPanel createRegisterPanel() {
@@ -266,7 +268,7 @@ public class SimulatorGUI extends JFrame {
     }
 
     private JTextField createRegisterTextField() {
-        JTextField field = new JTextField(8);
+        JTextField field = new JTextField(12);
         field.setFont(new Font("Monospaced", Font.PLAIN, 14));
         field.setHorizontalAlignment(JTextField.CENTER);
         field.setEditable(false);
@@ -372,6 +374,8 @@ public class SimulatorGUI extends JFrame {
         printerArea.setText("");
     }
 
+    // This method is no longer needed as the panel has been removed.
+    /*
     private JPanel createBottomPanel() {
         JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT));
         panel.add(new JLabel("Program File"));
@@ -382,6 +386,7 @@ public class SimulatorGUI extends JFrame {
         programFileTextField.setEditable(false);
         return panel;
     }
+    */
 
     private void addListeners() {
         octalInputField.addKeyListener(new KeyAdapter() {
@@ -448,7 +453,7 @@ public class SimulatorGUI extends JFrame {
                 }
                 case "IPL" -> {
                     System.out.println("Initializing machine (IPL)");
-                    cpu.ipl();
+                    loadProgramFromFile();
                 }
             }
         } catch (NumberFormatException ex) {
@@ -457,6 +462,17 @@ public class SimulatorGUI extends JFrame {
         }
     }
 
+    private void loadProgramFromFile() {
+        JFileChooser fileChooser = new JFileChooser(".");
+        fileChooser.setDialogTitle("Select Program File for IPL");
+        if (fileChooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
+            File programFile = fileChooser.getSelectedFile();
+            cpu.ipl(programFile); // Pass the selected file to the CPU's IPL process
+        }
+    }
+    
+    // This method is no longer needed.
+    /*
     private void assembleFile() {
         JFileChooser fileChooser = new JFileChooser(".");
         fileChooser.setDialogTitle("Select Load File");
@@ -473,10 +489,14 @@ public class SimulatorGUI extends JFrame {
             updateAllDisplays(); // Update GUI to show new register states
         }
     }
+    */
     
+    // This method is no longer needed.
+    /*
     public String getProgramFileName() {
         return programFileTextField.getText();
     }
+    */
 
     public void updateAllDisplays() {
         updateRegisters();

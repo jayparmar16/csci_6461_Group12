@@ -34,19 +34,20 @@ public class CPU {
         this.gui = gui;
     }
 
-    public void ipl() {
+    public void ipl(File programFile) {
         System.out.println("\n=== Initializing Machine (IPL) ===");
         resetMachine();
-        String programFile = gui.getProgramFileName();
-        if (programFile != null && !programFile.isEmpty()) {
+        if (programFile != null) {
             loadProgram(programFile);
+        } else {
+            System.out.println("No program file selected for IPL.");
         }
-        System.out.println("\nMachine ready - PC = " + String.format("%04o", pc) + ", all registers cleared");
+        System.out.println("\nMachine ready. PC may be set to start address if a program was loaded.");
         printRegisterState();
         gui.updateAllDisplays();
     }
     
-    private void resetMachine() {
+    public void resetMachine() {
         halt();
         System.out.println("Clearing all registers and memory...");
         // Clear memory and registers
@@ -57,59 +58,62 @@ public class CPU {
         isHalted = false;
     }
     
-    public void loadProgram(String programFile) {
-        try {
-            File loadFile = new File(programFile);
-            if (loadFile.exists()) {
-                System.out.println("\nLoading program from " + loadFile.getName());
-                BufferedReader reader = new BufferedReader(new FileReader(loadFile));
-                String line;
-                int firstAddress = -1;
-                
-                while ((line = reader.readLine()) != null) {
-                    try {
-                        String[] parts = line.trim().split("\\s+");
-                        if (parts.length == 2) {
-                            int address = Integer.parseInt(parts[0], 8); // Parse as octal
-                            short value = (short) Integer.parseInt(parts[1], 8); // Parse as octal
-                            
-                            // Keep track of first instruction's address
+    public void loadProgram(File programFile) {
+        // New add
+        short firstAddress = -1;
+        try (BufferedReader reader = new BufferedReader(new FileReader(programFile))) {
+            System.out.println("\nLoading program from " + programFile.getName());
+            String line;
+            
+            while ((line = reader.readLine()) != null) {
+                line = line.trim();
+                if (line.isEmpty()) continue;
+
+                try {
+                    String[] parts = line.split("\\s+");
+                    if (parts.length == 2) {
+                        int address = Integer.parseInt(parts[0], 8);
+                        short value = (short) Integer.parseInt(parts[1], 8);
+                        
+                        if (address >= 0 && address < memory.length) {
+                            memory[address] = value;
+                            System.out.printf("Loaded memory[%04o] = %06o\n", address, value);
+                            // New add
                             if (firstAddress == -1) {
-                                firstAddress = address;
+                                firstAddress = (short) address;
                             }
-                            
-                            if (!checkMemoryFault(address)) {
-                                memory[address] = value;
-                                System.out.printf("Loaded memory[%04o] = %06o\n", address, value);
-                            }
+                        } else {
+                            throw new IOException("Memory address " + String.format("%04o", address) + " is out of bounds.");
                         }
-                    } catch (NumberFormatException e) {
-                        System.out.println("Warning: Skipping invalid line: " + line);
                     }
+                } catch (NumberFormatException e) {
+                    System.out.println("Warning: Skipping invalid line: " + line);
                 }
-                
-                // After loading all instructions, set PC to first instruction
-                if (firstAddress != -1) {
-                    pc = (short)firstAddress;
-                    isHalted = false; // Reset halt state to allow execution
-                    System.out.printf("\nProgram loaded. PC set to first instruction at %04o\n", pc);
-                }
-                
-                reader.close();
-                System.out.println("Program loading complete");
-                gui.updateAllDisplays(); // Update GUI after loading program
-            } else {
-                System.out.println("Program file not found: " + programFile);
             }
-        } catch (Exception e) {
+            
+            // // Set PC to the conventional starting address for this program (010 octal)
+            // pc = 010; // Octal 10 is decimal 8.
+            // isHalted = false;
+            // System.out.printf("\nProgram loaded. PC set to start address %04o\n", pc);
+
+            // *** MODIFIED PC SETTING START ***
+            if (firstAddress != -1) {
+                pc = firstAddress; // Set PC to the address of the very first instruction loaded
+                isHalted = false;
+                System.out.printf("\nProgram loaded. PC set to start address %04o\n", pc);
+            } else {
+                // Handle case of an empty load file
+                System.out.println("Program loaded, but file was empty. PC remains 0.");
+            }
+            // *** MODIFIED PC SETTING END ***
+            
+            System.out.println("Program loading complete.");
+            gui.updateAllDisplays();
+        } catch (IOException e) {
             System.err.println("Error loading program: " + e.getMessage());
             gui.showError("Load Error", "Failed to load program: " + e.getMessage());
+            resetMachine(); // Reset on error
         }
-        
-        isHalted = false;
-        gui.updateAllDisplays();
-        System.out.println("\nMachine ready - PC = 0, all registers cleared");
-        printRegisterState();
     }
     
     private void printRegisterState() {
@@ -153,8 +157,8 @@ public class CPU {
         gui.updateAllDisplays();
     }
 
-    public void store(short value) {
-        mbr = value;
+    public void store(short address) {
+        mar = address;
         if (checkMemoryFault(mar)) return;
         memory[mar] = mbr;
         gui.updateAllDisplays();
@@ -177,17 +181,11 @@ public class CPU {
         pc++;
         
         // Decode instruction fields
-        // For instruction 000012:
-        // opcode = 00 (bits 15-10)
-        // r = 0 (bits 9-8)
-        // ix = 0 (bits 7-6)
-        // i = 1 (bit 5)
-        // address = 2 (bits 4-0)
-        int opcode = (ir >> 10) & 0x3F;  // bits 15-10
-        int r = (ir >> 8) & 0x3;         // bits 9-8
-        int ix = (ir >> 6) & 0x3;        // bits 7-6
-        int i = (ir >> 5) & 0x1;         // bit 5
-        int address = ir & 0x1F;         // bits 4-0
+        int opcode = (ir >>> 10) & 0x3F; // Bits 15-10
+        int r      = (ir >>> 8)  & 0x3;  // Bits 9-8
+        int ix     = (ir >>> 6)  & 0x3;  // Bits 7-6
+        int i      = (ir >>> 5)  & 0x1;  // Bit 5
+        int address = ir & 0x1F;         // Bits 4-0
         
         // Log instruction details
         gui.appendToPrinter("=== Instruction Execution ===");
@@ -196,22 +194,24 @@ public class CPU {
         gui.appendToPrinter(String.format("  Opcode: %02o", opcode));
         gui.appendToPrinter(String.format("  R: %01o", r));
         gui.appendToPrinter(String.format("  IX: %01o", ix));
-        gui.appendToPrinter(String.format("  I: %01o", i));
-        gui.appendToPrinter(String.format("  Address: %01o", address));
+        gui.appendToPrinter(String.format("  I: %o", i));
+        gui.appendToPrinter(String.format("  Address: %o", address));
         
         // 4. Execute based on opcode
+        // Effective Address Calculation
         int effectiveAddr = address;
-        if (ix != 0) {
+        if (ix > 0 && ix < 4) {
             effectiveAddr += ixr[ix];
-            gui.appendToPrinter(String.format("Using IX%d: %06o + %06o = %06o",
+            gui.appendToPrinter(String.format("Using IX%d: %o + %o = %o",
                               ix, address, ixr[ix], effectiveAddr));
         }
-        if (i == 1) {
+        if (i == 1) { // Indirect Addressing
+            // The address field points to the location of the effective address
             if (!checkMemoryFault((short)effectiveAddr)) {
                 effectiveAddr = memory[effectiveAddr];
-                System.out.println("Indirect addressing used");
+                gui.appendToPrinter("Indirect addressing used. New EA: " + String.format("%06o", effectiveAddr));
             } else {
-                return;
+                return; // Fault occurred
             }
         }
         System.out.printf("Effective Address: %06o\n", effectiveAddr);
