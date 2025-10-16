@@ -606,6 +606,14 @@ public class CPU {
     public short getCC() { return cc; }
     public short getMFR() { return mfr; }
     public Utils getUtils() { return utils; }
+    
+    // Setters for GUI
+    public void setGPR(int i, short value) { gpr[i] = value; }
+    public void setIXR(int i, short value) { ixr[i] = value; }
+    public void setPC(short value) { pc = value; }
+    public void setMAR(short value) { mar = value; }
+    public void setMBR(short value) { mbr = value; }
+    public void setIR(short value) { ir = value; }
 }
 
 /**

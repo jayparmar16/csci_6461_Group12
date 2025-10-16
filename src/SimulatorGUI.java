@@ -3,6 +3,7 @@ import java.awt.*;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
 import java.io.File;
+import java.awt.event.ActionListener;
 
 /**
  * The main Graphical User Interface for the CSCI 6461 Machine Simulator.
@@ -16,17 +17,20 @@ public class SimulatorGUI extends JFrame {
     // GUI Components
     private final JTextField[] gprTextFields = new JTextField[4];
     private final JTextField[] ixrTextFields = new JTextField[3];
-    private final JTextField pcTextField = new JTextField(12);
-    private final JTextField marTextField = new JTextField(12);
-    private final JTextField mbrTextField = new JTextField(12);
-    private final JTextField irTextField = new JTextField(12);
+    // PC and MAR are 12 bits -> 4 octal digits
+    private final JTextField pcTextField = new JTextField(4);
+    private final JTextField marTextField = new JTextField(4);
+    // MBR and IR are 16 bits -> 6 octal digits
+    private final JTextField mbrTextField = new JTextField(6);
+    private final JTextField irTextField = new JTextField(6);
+    // CC and MFR are 4 bits -> 4 binary digits
     private final JTextField ccTextField = new JTextField(4);
     private final JTextField mfrTextField = new JTextField(4);
     private final JTextField binaryDisplayField = new JTextField(20);
     private final JTextField octalInputField = new JTextField(12);
-    private final JTextArea cacheContentArea = new JTextArea(25, 40);
-    private final JTextArea printerArea = new JTextArea(10, 45);
-    private final JTextField consoleInputTextField = new JTextField(45);
+    private final JTextArea cacheContentArea = new JTextArea(35, 70);
+    private final JTextArea printerArea = new JTextArea(15, 70);
+    private final JTextField consoleInputTextField = new JTextField(70);
     // The programFileTextField is no longer needed here as IPL will handle file selection.
 
     public SimulatorGUI() {
@@ -48,7 +52,7 @@ public class SimulatorGUI extends JFrame {
     }
 
     private void setupComponents() {
-        setPreferredSize(new Dimension(900, 600));
+        setPreferredSize(new Dimension(1200, 650));
         getContentPane().setBackground(new Color(200, 220, 240));
         
         GridBagConstraints gbc = new GridBagConstraints();
@@ -59,7 +63,7 @@ public class SimulatorGUI extends JFrame {
         gbc.gridx = 0;
         gbc.gridy = 0;
         gbc.gridheight = 2;
-        gbc.weightx = 0.25;
+        gbc.weightx = 0.20;
         gbc.weighty = 1.0;
         JPanel registerPanel = createRegisterPanel();
         registerPanel.setBorder(BorderFactory.createCompoundBorder(
@@ -73,14 +77,14 @@ public class SimulatorGUI extends JFrame {
 
         // Center Panel (PC, MAR, MBR, IR, etc.)
         gbc.gridx = 1;
-        gbc.weightx = 0.35;
+        gbc.weightx = 0.30;
         JPanel centerPanel = createCenterPanel();
         centerPanel.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
         add(centerPanel, gbc);
 
         // Right Panel (Cache, Printer, Console)
         gbc.gridx = 2;
-        gbc.weightx = 0.4;
+        gbc.weightx = 0.50;
         gbc.gridheight = 3;
         JPanel rightPanel = createRightPanel();
         rightPanel.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
@@ -91,7 +95,7 @@ public class SimulatorGUI extends JFrame {
         gbc.gridy = 2;
         gbc.gridwidth = 2;
         gbc.gridheight = 1;
-        gbc.weightx = 0.6;
+        gbc.weightx = 0.5;
         gbc.weighty = 0.1;
         // The bottom panel is no longer needed.
         // add(createBottomPanel(), gbc);
@@ -210,11 +214,21 @@ public class SimulatorGUI extends JFrame {
         JPanel panel = new JPanel(new GridBagLayout());
         GridBagConstraints gbc = new GridBagConstraints();
         gbc.insets = new Insets(2, 5, 2, 5);
-
-        gbc.gridy = 0; panel.add(new JLabel("PC"), gbc); panel.add(pcTextField, gbc); panel.add(createBlueButton(), gbc);
-        gbc.gridy = 1; panel.add(new JLabel("MAR"), gbc); panel.add(marTextField, gbc); panel.add(createBlueButton(), gbc);
-        gbc.gridy = 2; panel.add(new JLabel("MBR"), gbc); panel.add(mbrTextField, gbc); panel.add(createBlueButton(), gbc);
-        gbc.gridy = 3; panel.add(new JLabel("IR"), gbc); panel.add(irTextField, gbc); panel.add(createBlueButton(), gbc);
+        gbc.gridx = 0; panel.add(new JLabel("PC"), gbc);
+        gbc.gridx = 1; panel.add(pcTextField, gbc);
+        gbc.gridx = 2; panel.add(createLoadButton(e -> loadRegisterValue("PC", 0)), gbc);
+        gbc.gridy = 1;
+        gbc.gridx = 0; panel.add(new JLabel("MAR"), gbc);
+        gbc.gridx = 1; panel.add(marTextField, gbc);
+        gbc.gridx = 2; panel.add(createLoadButton(e -> loadRegisterValue("MAR", 0)), gbc);
+        gbc.gridy = 2;
+        gbc.gridx = 0; panel.add(new JLabel("MBR"), gbc);
+        gbc.gridx = 1; panel.add(mbrTextField, gbc);
+        gbc.gridx = 2; panel.add(createLoadButton(e -> loadRegisterValue("MBR", 0)), gbc);
+        gbc.gridy = 3;
+        gbc.gridx = 0; panel.add(new JLabel("IR"), gbc);
+        gbc.gridx = 1; panel.add(irTextField, gbc);
+        gbc.gridx = 2; panel.add(createLoadButton(e -> loadRegisterValue("IR", 0)), gbc);
 
         return panel;
     }
@@ -522,7 +536,41 @@ public class SimulatorGUI extends JFrame {
         JOptionPane.showMessageDialog(this, message, title, JOptionPane.ERROR_MESSAGE);
     }
 
+    private JButton createLoadButton(ActionListener listener) {
+        JButton button = new JButton();
+        button.setPreferredSize(new Dimension(20, 20));
+        button.setBackground(new Color(100, 150, 255));
+        button.setToolTipText("Load value from Octal Input");
+        button.addActionListener(listener);
+        return button;
+    }
 
+ private void loadRegisterValue(String registerName, int index) {
+        try {
+            String octalString = octalInputField.getText();
+            if (octalString == null || octalString.trim().isEmpty()) {
+                showError("Input Error", "Octal Input field cannot be empty.");
+                return;
+            }
+            short value = cpu.getUtils().octalToShort(octalString);
+
+            System.out.printf("Loading value %06o into %s%s\n", value, registerName, (index >= 0 ? " " + index : ""));
+
+            switch (registerName) {
+                case "GPR" -> cpu.setGPR(index, value);
+                case "IXR" -> cpu.setIXR(index + 1, value); // IXRs are 1-based in CPU
+                case "PC" -> cpu.setPC(value);
+                case "MAR" -> cpu.setMAR(value);
+                case "MBR" -> cpu.setMBR(value);
+                case "IR" -> cpu.setIR(value);
+            }
+
+            updateAllDisplays();
+
+        } catch (NumberFormatException ex) {
+            showError("Invalid Octal Input", "Please enter a valid octal string.");
+        }
+    }
 
     private JButton createBlueButton() {
         JButton button = new JButton();
@@ -531,4 +579,5 @@ public class SimulatorGUI extends JFrame {
         button.setEnabled(false);
         return button;
     }
+
 }
