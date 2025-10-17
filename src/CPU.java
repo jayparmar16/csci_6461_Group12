@@ -12,8 +12,11 @@ public class CPU {
     private int mfr; // Machine Fault Register
     private int cc; // Condition Code
 
-    // Memory
+    // Memory & Cache
     private int[] memory = new int[2048];
+    // A simple cache placeholder
+    private final Map<Integer, Integer> cache = new HashMap<>();
+
 
     public CPU() {
         reset();
@@ -39,6 +42,77 @@ public class CPU {
         for (int i = 0; i < memory.length; i++) {
             memory[i] = 0;
         }
+        cache.clear();
+    }
+
+    // Single instruction cycle
+    public void instructionCycle() {
+        // Fetch phase
+        mar = pc;
+        mbr = memoryRead(mar);
+        ir = mbr;
+        pc++;
+
+        // Decode and Execute phase
+        decodeAndExecute();
+    }
+
+    private void decodeAndExecute() {
+        int opcode = (ir >> 10) & 0b111111;
+        int r = (ir >> 8) & 0b11;
+        int ix = (ir >> 6) & 0b11;
+        int i = (ir >> 5) & 0b1;
+        int address = ir & 0b11111;
+
+        int effectiveAddress = getEffectiveAddress(ix, address, i);
+
+        switch (opcode) {
+            case 0b000001: // LDR
+                mar = effectiveAddress;
+                mbr = memoryRead(mar);
+                gpr[r] = mbr;
+                break;
+            case 0b000010: // STR
+                mar = effectiveAddress;
+                mbr = gpr[r];
+                memoryWrite(mar, mbr);
+                break;
+            case 0b000000: // HLT
+                // Stop execution (handled by GUI)
+                break;
+            default:
+                // Handle illegal opcode
+                mfr = 1; // Set Machine Fault: Illegal Operation Code
+                break;
+        }
+    }
+
+    private int getEffectiveAddress(int ix, int address, int i) {
+        if (i == 0) { // No indirect addressing
+            if (ix == 0) { // No indexing
+                return address;
+            } else { // Indexing
+                return ixr[ix - 1] + address;
+            }
+        } else { // Indirect addressing
+            // To be implemented in next commit
+            return 0;
+        }
+    }
+
+    public int memoryRead(int address) {
+        // Simple memory read, cache logic to be expanded
+        if (cache.containsKey(address)) {
+            return cache.get(address);
+        }
+        int value = memory[address];
+        cache.put(address, value);
+        return value;
+    }
+
+    public void memoryWrite(int address, int value) {
+        memory[address] = value;
+        cache.put(address, value);
     }
 
     // Getter methods for GUI to display register values
@@ -50,4 +124,11 @@ public class CPU {
     public int getCC() { return cc; }
     public int getGPR(int index) { return gpr[index]; }
     public int getIXR(int index) { return ixr[index]; }
+    public int getMemory(int address) { return memory[address]; }
+
+    // Setter for loading program
+    public void setMemory(int address, int value) {
+        memory[address] = value;
+    }
+    public void setPC(int value) { this.pc = value; }
 }
