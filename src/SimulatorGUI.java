@@ -1,266 +1,586 @@
 import javax.swing.*;
 import java.awt.*;
-import java.awt.event.ActionEvent;
+import java.awt.event.KeyAdapter;
+import java.awt.event.KeyEvent;
+import java.io.File;
 import java.awt.event.ActionListener;
 
-public class SimulatorGUI {
+/**
+ * The main Graphical User Interface for the CSCI 6461 Machine Simulator.
+ * This class builds the window, panels, and all the interactive components,
+ * and it communicates with the CPU to run the simulation.
+ */
+public class SimulatorGUI extends JFrame {
 
-    private JFrame frame;
-    private CPU cpu;
+    private final CPU cpu;
 
-    // Register display fields
-    private JTextField[] gprFields = new JTextField[4];
-    private JTextField[] ixrFields = new JTextField[3];
-    private JTextField pcField, marField, mbrField, irField, mfrField, ccField;
+    // GUI Components
+    private final JTextField[] gprTextFields = new JTextField[4];
+    private final JTextField[] ixrTextFields = new JTextField[3];
+    // PC and MAR are 12 bits -> 4 octal digits
+    private final JTextField pcTextField = new JTextField(4);
+    private final JTextField marTextField = new JTextField(4);
+    // MBR and IR are 16 bits -> 6 octal digits
+    private final JTextField mbrTextField = new JTextField(6);
+    private final JTextField irTextField = new JTextField(6);
+    // CC and MFR are 4 bits -> 4 binary digits
+    private final JTextField ccTextField = new JTextField(4);
+    private final JTextField mfrTextField = new JTextField(4);
+    private final JTextField binaryDisplayField = new JTextField(20);
+    private final JTextField octalInputField = new JTextField(12);
+    private final JTextArea cacheContentArea = new JTextArea(35, 70);
+    private final JTextArea printerArea = new JTextArea(15, 80);
+    private final JTextField consoleInputTextField = new JTextField(70);
+    // The programFileTextField is no longer needed here as IPL will handle file selection.
 
-    // Control buttons and indicators
-    private JButton btnIPL, btnRun, btnStep;
-    private JPanel haltIndicator;
-    private JTextArea consolePrinter;
-    private JTextField consoleKeyboard;
-    private JTable memoryTable;
-    private SwingWorker<Void, Void> runWorker;
+    public SimulatorGUI() {
+        this.cpu = new CPU(this);
 
-    public SimulatorGUI(CPU cpu) {
-        this.cpu = cpu;
-        initialize();
-    }
+        setTitle("CSCI 6461 Machine Simulator");
+        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        setResizable(false);
+        setLayout(new GridBagLayout());
+        getContentPane().setBackground(new Color(200, 220, 240));
 
-    private void initialize() {
-        frame = new JFrame("CSCI-6461 Simulator");
-        frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        frame.getContentPane().setLayout(new BorderLayout(5, 5));
-
-        JPanel topPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        topPanel.add(createControlPanel());
-        topPanel.add(createRegisterPanel());
-
-        frame.getContentPane().add(topPanel, BorderLayout.NORTH);
-        frame.getContentPane().add(createMemoryPanel(), BorderLayout.CENTER);
-        frame.getContentPane().add(createConsolePanel(), BorderLayout.SOUTH);
-
+        setupComponents();
         addListeners();
-        cpu.setConsolePrinter(text -> consolePrinter.append(text + "\n"));
+
+        pack();
+        setLocationRelativeTo(null);
+        cpu.resetMachine(); // Perform initial reset on startup
         updateAllDisplays();
-        frame.pack();
-        frame.setVisible(true);
+        cacheContentArea.setText(""); // Clear cache content on startup
     }
 
-    private JPanel createControlPanel() {
-        JPanel panel = new JPanel(new GridBagLayout());
-        panel.setBorder(BorderFactory.createTitledBorder("Controls"));
+    private void setupComponents() {
+        setPreferredSize(new Dimension(1200, 650));
+        getContentPane().setBackground(new Color(200, 220, 240));
+        
         GridBagConstraints gbc = new GridBagConstraints();
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.insets = new Insets(2, 2, 2, 2);
+        gbc.insets = new Insets(10, 10, 10, 10);
+        gbc.fill = GridBagConstraints.BOTH;
+        
+        // Left Panel (GPRs, IXRs)
+        gbc.gridx = 0;
+        gbc.gridy = 0;
+        gbc.gridheight = 2;
+        gbc.weightx = 0.20;
+        gbc.weighty = 1.0;
+        JPanel registerPanel = createRegisterPanel();
+        registerPanel.setBorder(BorderFactory.createCompoundBorder(
+            BorderFactory.createEmptyBorder(5, 5, 5, 5),
+            BorderFactory.createTitledBorder(
+                BorderFactory.createLineBorder(new Color(100, 150, 255), 2),
+                "Registers"
+            )
+        ));
+        add(registerPanel, gbc);
 
-        btnIPL = new JButton("IPL");
-        btnRun = new JButton("Run");
-        btnStep = new JButton("Single Step");
-        haltIndicator = new JPanel();
-        haltIndicator.setBackground(Color.RED);
-        haltIndicator.setPreferredSize(new Dimension(20, 20));
-
-        gbc.gridwidth = 2;
-        panel.add(btnIPL, gbc);
-        gbc.gridy = 1;
-        panel.add(btnRun, gbc);
-        gbc.gridy = 2;
-        panel.add(btnStep, gbc);
-        gbc.gridy = 3;
-        gbc.gridwidth = 1;
-        panel.add(new JLabel("Halt"), gbc);
+        // Center Panel (PC, MAR, MBR, IR, etc.)
         gbc.gridx = 1;
-        panel.add(haltIndicator, gbc);
+        gbc.weightx = 0.30;
+        JPanel centerPanel = createCenterPanel();
+        centerPanel.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
+        add(centerPanel, gbc);
 
-        return panel;
-    }
+        // Right Panel (Cache, Printer, Console)
+        gbc.gridx = 2;
+        gbc.weightx = 0.50;
+        gbc.gridheight = 3;
+        JPanel rightPanel = createRightPanel();
+        rightPanel.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
+        add(rightPanel, gbc);
 
-    private JPanel createMemoryPanel() {
-        JPanel panel = new JPanel(new BorderLayout());
-        panel.setBorder(BorderFactory.createTitledBorder("Memory"));
-        String[] columnNames = {"Address", "Value"};
-        Object[][] data = new Object[2048][2];
-        for (int i = 0; i < 2048; i++) {
-            data[i][0] = i;
-            data[i][1] = 0;
-        }
-        memoryTable = new JTable(data, columnNames);
-        JScrollPane scrollPane = new JScrollPane(memoryTable);
-        panel.add(scrollPane, BorderLayout.CENTER);
-        return panel;
-    }
-
-    private JPanel createConsolePanel() {
-        JPanel panel = new JPanel(new BorderLayout());
-        panel.setBorder(BorderFactory.createTitledBorder("Console"));
-
-        consolePrinter = new JTextArea(5, 40);
-        consolePrinter.setEditable(false);
-        JScrollPane scrollPane = new JScrollPane(consolePrinter);
-        panel.add(scrollPane, BorderLayout.CENTER);
-
-        JPanel inputPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        inputPanel.add(new JLabel("Input:"));
-        consoleKeyboard = new JTextField(20);
-        inputPanel.add(consoleKeyboard);
-        panel.add(inputPanel, BorderLayout.SOUTH);
-
-        consoleKeyboard.addActionListener(e -> {
-            try {
-                int value = Integer.parseInt(consoleKeyboard.getText().trim());
-                cpu.setKeyboardBuffer(value);
-                consoleKeyboard.setText("");
-                // If waiting for input, resume execution
-                if (runWorker != null && runWorker.isDone()) {
-                    btnRun.doClick();
-                }
-            } catch (NumberFormatException ex) {
-                JOptionPane.showMessageDialog(frame, "Invalid input. Please enter a number.");
-            }
-        });
-
-        return panel;
+        // Bottom Panel (Program File)
+        gbc.gridx = 0;
+        gbc.gridy = 2;
+        gbc.gridwidth = 2;
+        gbc.gridheight = 1;
+        gbc.weightx = 0.5;
+        gbc.weighty = 0.1;
+        // The bottom panel is no longer needed.
+        // add(createBottomPanel(), gbc);
     }
 
     private JPanel createRegisterPanel() {
         JPanel panel = new JPanel(new GridBagLayout());
-        panel.setBorder(BorderFactory.createTitledBorder("Registers"));
         GridBagConstraints gbc = new GridBagConstraints();
-        gbc.insets = new Insets(2, 5, 2, 5);
+        gbc.insets = new Insets(3, 5, 3, 5);
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.anchor = GridBagConstraints.WEST;
 
-        // GPRs
+        // Style for register labels
+        Font labelFont = new Font("SansSerif", Font.BOLD, 12);
+        
+        // GPR Registers
         for (int i = 0; i < 4; i++) {
+            gbc.gridy = i;
+            
+            JLabel label = new JLabel("GPR " + i);
+            label.setFont(labelFont);
             gbc.gridx = 0;
-            gbc.gridy = i;
-            panel.add(new JLabel("GPR" + i), gbc);
-            gprFields[i] = new JTextField(6);
-            gprFields[i].setEditable(false);
+            gbc.weightx = 0.2;
+            panel.add(label, gbc);
+            
+            gprTextFields[i] = createRegisterTextField();
             gbc.gridx = 1;
-            panel.add(gprFields[i], gbc);
-        }
-
-        // IXRs
-        for (int i = 0; i < 3; i++) {
+            gbc.weightx = 0.6;
+            panel.add(gprTextFields[i], gbc);
+            
+            JButton button = createBlueButton();
             gbc.gridx = 2;
-            gbc.gridy = i;
-            panel.add(new JLabel("IXR" + (i + 1)), gbc);
-            ixrFields[i] = new JTextField(6);
-            ixrFields[i].setEditable(false);
-            gbc.gridx = 3;
-            panel.add(ixrFields[i], gbc);
+            gbc.weightx = 0.2;
+            panel.add(button, gbc);
         }
 
-        // Other Registers
-        pcField = new JTextField(6);
-        marField = new JTextField(6);
-        mbrField = new JTextField(6);
-        irField = new JTextField(6);
-        mfrField = new JTextField(4);
-        ccField = new JTextField(4);
+        // Add some spacing between GPR and IXR
+        gbc.gridy++;
+        panel.add(Box.createVerticalStrut(10), gbc);
 
-        addRegisterToPanel(panel, "PC", pcField, 0, 4);
-        addRegisterToPanel(panel, "MAR", marField, 0, 5);
-        addRegisterToPanel(panel, "MBR", mbrField, 0, 6);
-        addRegisterToPanel(panel, "IR", irField, 2, 4);
-        addRegisterToPanel(panel, "MFR", mfrField, 2, 5);
-        addRegisterToPanel(panel, "CC", ccField, 2, 6);
+        // IXR Registers
+        for (int i = 0; i < 3; i++) {
+            gbc.gridy = i + 5;
+            
+            JLabel label = new JLabel("IXR " + (i + 1));
+            label.setFont(labelFont);
+            gbc.gridx = 0;
+            gbc.weightx = 0.2;
+            panel.add(label, gbc);
+            
+            ixrTextFields[i] = createRegisterTextField();
+            gbc.gridx = 1;
+            gbc.weightx = 0.6;
+            panel.add(ixrTextFields[i], gbc);
+            
+            JButton button = createBlueButton();
+            gbc.gridx = 2;
+            gbc.weightx = 0.2;
+            panel.add(button, gbc);
+        }
+
+        // Add padding at the bottom
+        gbc.gridy++;
+        gbc.weighty = 1.0;
+        panel.add(Box.createVerticalGlue(), gbc);
+        
+        return panel;
+    }
+
+    private JPanel createCenterPanel() {
+        JPanel panel = new JPanel(new GridBagLayout());
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(5, 5, 5, 5);
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.anchor = GridBagConstraints.NORTH;
+
+        // Internal Registers Panel
+        gbc.gridx = 0;
+        gbc.gridy = 0;
+        gbc.weightx = 1.0;
+        JPanel internalRegPanel = createInternalRegisterPanel();
+        internalRegPanel.setBorder(BorderFactory.createCompoundBorder(
+            BorderFactory.createEmptyBorder(0, 0, 10, 0),
+            BorderFactory.createTitledBorder(
+                BorderFactory.createLineBorder(new Color(100, 150, 255), 2),
+                "Internal Registers"
+            )
+        ));
+        panel.add(internalRegPanel, gbc);
+
+        // Binary/Octal Panel
+        gbc.gridy = 1;
+        gbc.insets = new Insets(10, 5, 10, 5);
+        JPanel binaryOctalPanel = createBinaryOctalPanel();
+        binaryOctalPanel.setBorder(BorderFactory.createCompoundBorder(
+            BorderFactory.createEmptyBorder(0, 0, 10, 0),
+            BorderFactory.createTitledBorder(
+                BorderFactory.createLineBorder(new Color(100, 150, 255), 2),
+                "Data Input/Output"
+            )
+        ));
+        panel.add(binaryOctalPanel, gbc);
+
+        // Operation Buttons Panel
+        gbc.gridy = 2;
+        gbc.weighty = 1.0;
+        gbc.anchor = GridBagConstraints.NORTH;
+        JPanel buttonsPanel = createOperationButtonsPanel();
+        buttonsPanel.setBorder(BorderFactory.createEmptyBorder(10, 0, 0, 0));
+        panel.add(buttonsPanel, gbc);
 
         return panel;
     }
 
-    private void addRegisterToPanel(JPanel panel, String label, JTextField field, int x, int y) {
+    private JPanel createInternalRegisterPanel() {
+        JPanel panel = new JPanel(new GridBagLayout());
         GridBagConstraints gbc = new GridBagConstraints();
         gbc.insets = new Insets(2, 5, 2, 5);
-        gbc.gridx = x;
-        gbc.gridy = y;
-        panel.add(new JLabel(label), gbc);
-        field.setEditable(false);
-        gbc.gridx = x + 1;
-        panel.add(field, gbc);
+        gbc.gridx = 0; panel.add(new JLabel("PC"), gbc);
+        gbc.gridx = 1; panel.add(pcTextField, gbc);
+        gbc.gridx = 2; panel.add(createLoadButton(e -> loadRegisterValue("PC", 0)), gbc);
+        gbc.gridy = 1;
+        gbc.gridx = 0; panel.add(new JLabel("MAR"), gbc);
+        gbc.gridx = 1; panel.add(marTextField, gbc);
+        gbc.gridx = 2; panel.add(createLoadButton(e -> loadRegisterValue("MAR", 0)), gbc);
+        gbc.gridy = 2;
+        gbc.gridx = 0; panel.add(new JLabel("MBR"), gbc);
+        gbc.gridx = 1; panel.add(mbrTextField, gbc);
+        gbc.gridx = 2; panel.add(createLoadButton(e -> loadRegisterValue("MBR", 0)), gbc);
+        gbc.gridy = 3;
+        gbc.gridx = 0; panel.add(new JLabel("IR"), gbc);
+        gbc.gridx = 1; panel.add(irTextField, gbc);
+        gbc.gridx = 2; panel.add(createLoadButton(e -> loadRegisterValue("IR", 0)), gbc);
+
+        return panel;
     }
+
+    private JPanel createBinaryOctalPanel() {
+        JPanel panel = new JPanel(new GridBagLayout());
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(5, 5, 5, 5);
+
+        gbc.gridy = 0; panel.add(new JLabel("BINARY"), gbc);
+        gbc.gridy = 1; panel.add(binaryDisplayField, gbc);
+        gbc.gridy = 2; panel.add(new JLabel("OCTAL INPUT"), gbc);
+        gbc.gridy = 3; panel.add(octalInputField, gbc);
+        octalInputField.setText("000000");
+        binaryDisplayField.setEditable(false);
+        binaryDisplayField.setFont(new Font("Monospaced", Font.PLAIN, 12));
+
+        return panel;
+    }
+
+    private JPanel createOperationButtonsPanel() {
+        JPanel panel = new JPanel(new GridLayout(2, 4, 8, 8));
+        panel.setBackground(new Color(200, 220, 240));
+        
+        // Define common button dimensions
+        Dimension buttonSize = new Dimension(80, 30);
+        Font buttonFont = new Font("SansSerif", Font.BOLD, 12);
+        
+        // Create and style each button
+        JButton[] buttons = {
+            createOperationButton("Load"),
+            createOperationButton("Run"),
+            createOperationButton("Halt", Color.RED),
+            createOperationButton("Load+"),
+            createOperationButton("Step"),
+            createOperationButton("IPL", Color.RED),
+            createOperationButton("Store"),
+            createOperationButton("Store+")
+        };
+        
+        for (JButton button : buttons) {
+            button.setPreferredSize(buttonSize);
+            button.setFont(buttonFont);
+            button.setFocusPainted(false);
+            button.setBorderPainted(true);
+            button.setBackground(new Color(240, 240, 240));
+            panel.add(button);
+        }
+        
+        return panel;
+    }
+
+    private JTextField createRegisterTextField() {
+        JTextField field = new JTextField(12);
+        field.setFont(new Font("Monospaced", Font.PLAIN, 14));
+        field.setHorizontalAlignment(JTextField.CENTER);
+        field.setEditable(false);
+        field.setBackground(Color.WHITE);
+        field.setBorder(BorderFactory.createCompoundBorder(
+            BorderFactory.createLineBorder(new Color(100, 150, 255)),
+            BorderFactory.createEmptyBorder(2, 5, 2, 5)
+        ));
+        return field;
+    }
+
+    private JPanel createRightPanel() {
+        JPanel panel = new JPanel(new GridBagLayout());
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.fill = GridBagConstraints.BOTH;
+        gbc.weightx = 1.0; // Allow horizontal expansion
+
+        // CC and MFR Panel
+        JPanel statusPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 5));
+        statusPanel.setBackground(new Color(200, 220, 240));
+        
+        // Style for CC and MFR
+        Font statusFont = new Font("SansSerif", Font.BOLD, 12);
+        ccTextField.setFont(new Font("Monospaced", Font.PLAIN, 14));
+        mfrTextField.setFont(new Font("Monospaced", Font.PLAIN, 14));
+        ccTextField.setPreferredSize(new Dimension(60, 25));
+        mfrTextField.setPreferredSize(new Dimension(60, 25));
+        
+        JLabel ccLabel = new JLabel("CC");
+        JLabel mfrLabel = new JLabel("MFR");
+        ccLabel.setFont(statusFont);
+        mfrLabel.setFont(statusFont);
+        
+        statusPanel.add(ccLabel);
+        statusPanel.add(ccTextField);
+        statusPanel.add(Box.createHorizontalStrut(15));
+        statusPanel.add(mfrLabel);
+        statusPanel.add(mfrTextField);
+        
+        gbc.gridy = 0;
+        gbc.weighty = 0;
+        gbc.insets = new Insets(5, 5, 5, 5);
+        panel.add(statusPanel, gbc);
+
+        // Cache Content
+        cacheContentArea.setFont(new Font("Monospaced", Font.PLAIN, 13));
+        cacheContentArea.setEditable(false);
+        cacheContentArea.setBackground(new Color(250, 250, 250));
+        JScrollPane cacheScrollPane = new JScrollPane(cacheContentArea);
+        cacheScrollPane.setBorder(BorderFactory.createCompoundBorder(
+            BorderFactory.createEmptyBorder(5, 0, 5, 0),
+            BorderFactory.createTitledBorder(
+                BorderFactory.createLineBorder(new Color(100, 150, 255), 2),
+                "Cache Content"
+            )
+        ));
+        gbc.gridy = 1;
+        gbc.weighty = 1.0;
+        panel.add(cacheScrollPane, gbc);
+
+        // Printer and Console Input
+        JPanel ioPanel = new JPanel(new BorderLayout(0, 5));
+        ioPanel.setBackground(new Color(200, 220, 240));
+        
+        // Printer Area
+        printerArea.setEditable(false);
+        printerArea.setFont(new Font("Monospaced", Font.PLAIN, 13));
+        printerArea.setBackground(new Color(250, 250, 250));
+        JScrollPane printerScrollPane = new JScrollPane(printerArea);
+        printerScrollPane.setBorder(BorderFactory.createCompoundBorder(
+            BorderFactory.createEmptyBorder(5, 0, 5, 0),
+            BorderFactory.createTitledBorder(
+                BorderFactory.createLineBorder(new Color(100, 150, 255), 2),
+                "Printer"
+            )
+        ));
+        
+        // Console Input
+        consoleInputTextField.setFont(new Font("Monospaced", Font.PLAIN, 13));
+        consoleInputTextField.setBorder(BorderFactory.createCompoundBorder(
+            BorderFactory.createEmptyBorder(0, 0, 5, 0),
+            BorderFactory.createTitledBorder(
+                BorderFactory.createLineBorder(new Color(100, 150, 255), 2),
+                "Console Input"
+            )
+        ));
+        
+        ioPanel.add(printerScrollPane, BorderLayout.CENTER);
+        ioPanel.add(consoleInputTextField, BorderLayout.SOUTH);
+        
+        gbc.gridy = 2;
+        gbc.weighty = 0.5;
+        gbc.insets = new Insets(5, 0, 5, 0);
+        panel.add(ioPanel, gbc);
+
+        return panel;
+    }
+
+    public void appendToPrinter(String text) {
+        printerArea.append(text + "\n");
+        printerArea.setCaretPosition(printerArea.getDocument().getLength());
+    }
+    
+    public void clearPrinter() {
+        printerArea.setText("");
+    }
+
+    // This method is no longer needed as the panel has been removed.
+    /*
+    private JPanel createBottomPanel() {
+        JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        panel.add(new JLabel("Program File"));
+        panel.add(programFileTextField);
+        JButton loadButton = new JButton("Select File");
+        loadButton.addActionListener(e -> assembleFile());
+        panel.add(loadButton);
+        programFileTextField.setEditable(false);
+        return panel;
+    }
+    */
 
     private void addListeners() {
-        btnIPL.addActionListener(e -> {
-            cpu.reset();
-            // Load a program that uses IN and OUT
-            // OUT R1 -> 011010 01 00 0 00000 -> 0x1A40
-            // IN R1 -> 011001 01 00 0 00000 -> 0x1940
-            cpu.setMemory(10, 0x1940); // IN R1
-            cpu.setMemory(11, 0x1A40); // OUT R1
-            cpu.setMemory(12, 0);      // HLT
-            cpu.setPC(10);
-            updateAllDisplays();
-            consolePrinter.setText("");
-        });
-
-        btnStep.addActionListener(e -> {
-            if (cpu.getIR() != 0 && cpu.getMFR() == 0) {
-                cpu.instructionCycle();
-                updateAllDisplays();
+        octalInputField.addKeyListener(new KeyAdapter() {
+            @Override
+            public void keyReleased(KeyEvent e) {
+                updateBinaryDisplayFromOctalInput();
             }
         });
-
-        btnRun.addActionListener(e -> {
-            btnRun.setEnabled(false);
-            btnStep.setEnabled(false);
-            runWorker = new SwingWorker<>() {
-                @Override
-                protected Void doInBackground() throws Exception {
-                    while (cpu.getIR() != 0 && cpu.getMFR() == 0) {
-                        cpu.instructionCycle();
-                        publish(); // Triggers process() to update GUI
-                        Thread.sleep(100); // Slow down for visualization
-                    }
-                    return null;
-                }
-
-                @Override
-                protected void process(java.util.List<Void> chunks) {
-                    updateAllDisplays();
-                }
-
-                @Override
-                protected void done() {
-                    updateAllDisplays();
-                    btnRun.setEnabled(true);
-                    btnStep.setEnabled(true);
-                }
-            };
-            runWorker.execute();
-        });
     }
 
-    private void updateAllDisplays() {
-        updateRegisterPanels();
-        updateMemoryDisplay();
-        haltIndicator.setBackground(cpu.getIR() == 0 || cpu.getMFR() != 0 ? Color.RED : Color.GREEN);
-    }
-
-    private void updateRegisterPanels() {
-        for (int i = 0; i < 4; i++) gprFields[i].setText(String.valueOf(cpu.getGPR(i)));
-        for (int i = 0; i < 3; i++) ixrFields[i].setText(String.valueOf(cpu.getIXR(i)));
-        pcField.setText(String.valueOf(cpu.getPC()));
-        marField.setText(String.valueOf(cpu.getMAR()));
-        mbrField.setText(String.valueOf(cpu.getMBR()));
-        irField.setText(String.valueOf(cpu.getIR()));
-        mfrField.setText(String.valueOf(cpu.getMFR()));
-        ccField.setText(String.valueOf(cpu.getCC()));
-    }
-
-    private void updateMemoryDisplay() {
-        for (int i = 0; i < 2048; i++) {
-            memoryTable.setValueAt(cpu.getMemory(i), i, 1);
+    private void updateBinaryDisplayFromOctalInput() {
+        try {
+            short value = cpu.getUtils().octalToShort(octalInputField.getText());
+            binaryDisplayField.setText(cpu.getUtils().shortToBinary(value, 16));
+        } catch (NumberFormatException ex) {
+            binaryDisplayField.setText("Invalid Octal Input");
         }
     }
 
-    public static void main(String[] args) {
-        EventQueue.invokeLater(() -> {
-            try {
-                CPU cpu = new CPU();
-                new SimulatorGUI(cpu);
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-        });
+    private JButton createOperationButton(String text, Color... color) {
+        JButton button = new JButton(text);
+        if (color.length > 0) {
+            button.setForeground(color[0]);
+            button.setFont(new Font("SansSerif", Font.BOLD, 12));
+        }
+        button.addActionListener(e -> handleButtonPress(text));
+        return button;
     }
+
+    public void handleButtonPress(String command) {
+        try {
+            System.out.println("\n=== Button Press: " + command + " ===");
+            short octalValue = cpu.getUtils().octalToShort(octalInputField.getText());
+            System.out.printf("Octal Input Value: %06o\n", octalValue);
+            
+            switch (command) {
+                case "Load" -> {
+                    System.out.println("Executing LOAD operation");
+                    cpu.load(octalValue);
+                }
+                case "Load+" -> {
+                    System.out.println("Executing LOAD+ operation");
+                    cpu.loadPlus(octalValue);
+                }
+                case "Store" -> {
+                    System.out.println("Executing STORE operation");
+                    cpu.store(octalValue);
+                }
+                case "Store+" -> {
+                    System.out.println("Executing STORE+ operation");
+                    cpu.storePlus(octalValue);
+                }
+                case "Run" -> {
+                    System.out.println("Starting program execution");
+                    cpu.runProgram();
+                }
+                case "Step" -> {
+                    System.out.println("Executing single instruction step");
+                    cpu.singleStep();
+                }
+                case "Halt" -> {
+                    System.out.println("Halting machine execution");
+                    cpu.halt();
+                }
+                case "IPL" -> {
+                    System.out.println("Initializing machine (IPL)");
+                    loadProgramFromFile();
+                }
+            }
+        } catch (NumberFormatException ex) {
+            System.out.println("ERROR: Invalid octal input - " + octalInputField.getText());
+            showError("Invalid Octal Input", "Please enter a valid octal string (0-7, up to 6 digits).");
+        }
+    }
+
+    private void loadProgramFromFile() {
+        JFileChooser fileChooser = new JFileChooser(".");
+        fileChooser.setDialogTitle("Select Program File for IPL");
+        if (fileChooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
+            File programFile = fileChooser.getSelectedFile();
+            cpu.ipl(programFile); // Pass the selected file to the CPU's IPL process
+        }
+    }
+    
+    // This method is no longer needed.
+    /*
+    private void assembleFile() {
+        JFileChooser fileChooser = new JFileChooser(".");
+        fileChooser.setDialogTitle("Select Load File");
+        fileChooser.setDialogType(JFileChooser.OPEN_DIALOG);
+        if (fileChooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
+            File loadFile = fileChooser.getSelectedFile();
+            programFileTextField.setText(loadFile.getAbsolutePath());
+            System.out.println("\n=== Selected Program File ===");
+            System.out.println("File: " + loadFile.getName());
+            System.out.println("Path: " + loadFile.getAbsolutePath());
+            
+            // Load the program immediately
+            cpu.loadProgram(loadFile.getAbsolutePath());
+            updateAllDisplays(); // Update GUI to show new register states
+        }
+    }
+    */
+    
+    // This method is no longer needed.
+    /*
+    public String getProgramFileName() {
+        return programFileTextField.getText();
+    }
+    */
+
+    public void updateAllDisplays() {
+        updateRegisters();
+        // updateMemoryView();
+    }
+
+    public void updateRegisters() {
+        for (int i = 0; i < 4; i++) gprTextFields[i].setText(cpu.getUtils().shortToOctal(cpu.getGPR(i), 6));
+        for (int i = 0; i < 3; i++) ixrTextFields[i].setText(cpu.getUtils().shortToOctal(cpu.getIXR(i + 1), 6));
+        pcTextField.setText(cpu.getUtils().shortToOctal(cpu.getPC(), 4));
+        marTextField.setText(cpu.getUtils().shortToOctal(cpu.getMAR(), 4));
+        mbrTextField.setText(cpu.getUtils().shortToOctal(cpu.getMBR(), 6));
+        irTextField.setText(cpu.getUtils().shortToOctal(cpu.getIR(), 6));
+        ccTextField.setText(cpu.getUtils().shortToBinary(cpu.getCC(), 4));
+        mfrTextField.setText(cpu.getUtils().shortToBinary(cpu.getMFR(), 4));
+    }
+
+    public void updateMemoryView() {
+        // cacheContentArea.setText(cpu.getFormattedMemory());
+    }
+
+    public void showError(String title, String message) {
+        JOptionPane.showMessageDialog(this, message, title, JOptionPane.ERROR_MESSAGE);
+    }
+
+    private JButton createLoadButton(ActionListener listener) {
+        JButton button = new JButton();
+        button.setPreferredSize(new Dimension(20, 20));
+        button.setBackground(new Color(100, 150, 255));
+        button.setToolTipText("Load value from Octal Input");
+        button.addActionListener(listener);
+        return button;
+    }
+
+ private void loadRegisterValue(String registerName, int index) {
+        try {
+            String octalString = octalInputField.getText();
+            if (octalString == null || octalString.trim().isEmpty()) {
+                showError("Input Error", "Octal Input field cannot be empty.");
+                return;
+            }
+            short value = cpu.getUtils().octalToShort(octalString);
+
+            System.out.printf("Loading value %06o into %s%s\n", value, registerName, (index >= 0 ? " " + index : ""));
+
+            switch (registerName) {
+                case "GPR" -> cpu.setGPR(index, value);
+                case "IXR" -> cpu.setIXR(index + 1, value); // IXRs are 1-based in CPU
+                case "PC" -> cpu.setPC(value);
+                case "MAR" -> cpu.setMAR(value);
+                case "MBR" -> cpu.setMBR(value);
+                case "IR" -> cpu.setIR(value);
+            }
+
+            updateAllDisplays();
+
+        } catch (NumberFormatException ex) {
+            showError("Invalid Octal Input", "Please enter a valid octal string.");
+        }
+    }
+
+    private JButton createBlueButton() {
+        JButton button = new JButton();
+        button.setPreferredSize(new Dimension(20, 20));
+        button.setBackground(new Color(100, 150, 255));
+        button.setEnabled(false);
+        return button;
+    }
+
 }

@@ -1,9 +1,16 @@
 import java.util.HashMap;
+import java.util.Map;
 
+/**
+ * Defines the Instruction Set Architecture (ISA) for the C6461 computer.
+ * This class holds all the official opcodes as specified in the ISA document.
+ */
 public final class ISA {
-
-    // A map to store the instruction mnemonic and its integer opcode value.
-    private static final HashMap<String, Integer> OPCODES = new HashMap<>();
+    private static final Map<String, Integer> OPCODES = new HashMap<>();
+    
+    public static int octal(String oct) {
+        return Integer.parseInt(oct, 8);
+    }
 
     static {
         OPCODES.put("HLT", octal("00")); // Halts program execution.
@@ -38,32 +45,13 @@ public final class ISA {
         OPCODES.put("CHK", octal("63")); // Checks the status of a device.
     }
 
-    private ISA() {}
+    private ISA() {} // Prevents instantiation
 
-    /**
-     * helper method to convert an octal string into its integer equivalent.
-     * @param octalStr The string representing an octal number.
-     * @return The integer value of the octal string.
-     */
-    private static int octal(String octalStr) {
-        return Integer.parseInt(octalStr, 8);
-    }
-
-    /**
-     * Retrieves the integer opcode for a given instruction mnemonic
-     * @param mnemonic The instruction's text representation
-     * @return The integer value of the opcode, null if the mnemonic is not found
-     */
     public static Integer getOpcode(String mnemonic) {
         return OPCODES.get(mnemonic.toUpperCase());
     }
-
-    /**
-     * Checks if a given mnemonic corresponds to a valid instruction in the ISA
-     * @param mnemonic The instruction's text representation
-     * @return True if the instruction is valid, otherwise false.
-     */
-    public static boolean isInstruction(String mnemonic) {
-        return OPCODES.containsKey(mnemonic.toUpperCase());
+    
+    public static boolean isValidOpcode(int opcode) {
+        return OPCODES.containsValue(opcode);
     }
 }
