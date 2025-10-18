@@ -13,9 +13,13 @@ public class SimulatorGUI {
     private JTextField[] ixrFields = new JTextField[3];
     private JTextField pcField, marField, mbrField, irField, mfrField, ccField;
 
-    // Control buttons
+    // Control buttons and indicators
     private JButton btnIPL, btnRun, btnStep;
+    private JPanel haltIndicator;
+    private JTextArea consolePrinter;
+    private JTextField consoleKeyboard;
     private JTable memoryTable;
+    private SwingWorker<Void, Void> runWorker;
 
     public SimulatorGUI(CPU cpu) {
         this.cpu = cpu;
@@ -25,31 +29,49 @@ public class SimulatorGUI {
     private void initialize() {
         frame = new JFrame("CSCI-6461 Simulator");
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        frame.getContentPane().setLayout(new BorderLayout());
+        frame.getContentPane().setLayout(new BorderLayout(5, 5));
 
-        // Create and add panels
-        JPanel topPanel = new JPanel(new FlowLayout());
+        JPanel topPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
         topPanel.add(createControlPanel());
         topPanel.add(createRegisterPanel());
 
         frame.getContentPane().add(topPanel, BorderLayout.NORTH);
         frame.getContentPane().add(createMemoryPanel(), BorderLayout.CENTER);
+        frame.getContentPane().add(createConsolePanel(), BorderLayout.SOUTH);
 
         addListeners();
+        cpu.setConsolePrinter(text -> consolePrinter.append(text + "\n"));
         updateAllDisplays();
         frame.pack();
         frame.setVisible(true);
     }
 
     private JPanel createControlPanel() {
-        JPanel panel = new JPanel(new GridLayout(0, 1));
+        JPanel panel = new JPanel(new GridBagLayout());
         panel.setBorder(BorderFactory.createTitledBorder("Controls"));
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.insets = new Insets(2, 2, 2, 2);
+
         btnIPL = new JButton("IPL");
         btnRun = new JButton("Run");
         btnStep = new JButton("Single Step");
-        panel.add(btnIPL);
-        panel.add(btnRun);
-        panel.add(btnStep);
+        haltIndicator = new JPanel();
+        haltIndicator.setBackground(Color.RED);
+        haltIndicator.setPreferredSize(new Dimension(20, 20));
+
+        gbc.gridwidth = 2;
+        panel.add(btnIPL, gbc);
+        gbc.gridy = 1;
+        panel.add(btnRun, gbc);
+        gbc.gridy = 2;
+        panel.add(btnStep, gbc);
+        gbc.gridy = 3;
+        gbc.gridwidth = 1;
+        panel.add(new JLabel("Halt"), gbc);
+        gbc.gridx = 1;
+        panel.add(haltIndicator, gbc);
+
         return panel;
     }
 
@@ -65,6 +87,38 @@ public class SimulatorGUI {
         memoryTable = new JTable(data, columnNames);
         JScrollPane scrollPane = new JScrollPane(memoryTable);
         panel.add(scrollPane, BorderLayout.CENTER);
+        return panel;
+    }
+
+    private JPanel createConsolePanel() {
+        JPanel panel = new JPanel(new BorderLayout());
+        panel.setBorder(BorderFactory.createTitledBorder("Console"));
+
+        consolePrinter = new JTextArea(5, 40);
+        consolePrinter.setEditable(false);
+        JScrollPane scrollPane = new JScrollPane(consolePrinter);
+        panel.add(scrollPane, BorderLayout.CENTER);
+
+        JPanel inputPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        inputPanel.add(new JLabel("Input:"));
+        consoleKeyboard = new JTextField(20);
+        inputPanel.add(consoleKeyboard);
+        panel.add(inputPanel, BorderLayout.SOUTH);
+
+        consoleKeyboard.addActionListener(e -> {
+            try {
+                int value = Integer.parseInt(consoleKeyboard.getText().trim());
+                cpu.setKeyboardBuffer(value);
+                consoleKeyboard.setText("");
+                // If waiting for input, resume execution
+                if (runWorker != null && runWorker.isDone()) {
+                    btnRun.doClick();
+                }
+            } catch (NumberFormatException ex) {
+                JOptionPane.showMessageDialog(frame, "Invalid input. Please enter a number.");
+            }
+        });
+
         return panel;
     }
 
@@ -127,34 +181,59 @@ public class SimulatorGUI {
 
     private void addListeners() {
         btnIPL.addActionListener(e -> {
-            // Load a simple program for testing
-            // LDR 1,0,5 -> 000001 01 00 0 00101 -> 0x445
             cpu.reset();
-            cpu.setMemory(10, 0b0000010100000101); // LDR R1, 0, 5
-            cpu.setMemory(5, 123); // Value to be loaded
-            // HLT -> 0
-            cpu.setMemory(11, 0b0000000000000000);
+            // Load a program that uses IN and OUT
+            // OUT R1 -> 011010 01 00 0 00000 -> 0x1A40
+            // IN R1 -> 011001 01 00 0 00000 -> 0x1940
+            cpu.setMemory(10, 0x1940); // IN R1
+            cpu.setMemory(11, 0x1A40); // OUT R1
+            cpu.setMemory(12, 0);      // HLT
             cpu.setPC(10);
             updateAllDisplays();
+            consolePrinter.setText("");
         });
 
         btnStep.addActionListener(e -> {
-            cpu.instructionCycle();
-            updateAllDisplays();
+            if (cpu.getIR() != 0 && cpu.getMFR() == 0) {
+                cpu.instructionCycle();
+                updateAllDisplays();
+            }
         });
 
         btnRun.addActionListener(e -> {
-            // Simple run loop, will be improved with a SwingWorker later
-            while (cpu.getIR() != 0) {
-                cpu.instructionCycle();
-            }
-            updateAllDisplays();
+            btnRun.setEnabled(false);
+            btnStep.setEnabled(false);
+            runWorker = new SwingWorker<>() {
+                @Override
+                protected Void doInBackground() throws Exception {
+                    while (cpu.getIR() != 0 && cpu.getMFR() == 0) {
+                        cpu.instructionCycle();
+                        publish(); // Triggers process() to update GUI
+                        Thread.sleep(100); // Slow down for visualization
+                    }
+                    return null;
+                }
+
+                @Override
+                protected void process(java.util.List<Void> chunks) {
+                    updateAllDisplays();
+                }
+
+                @Override
+                protected void done() {
+                    updateAllDisplays();
+                    btnRun.setEnabled(true);
+                    btnStep.setEnabled(true);
+                }
+            };
+            runWorker.execute();
         });
     }
 
     private void updateAllDisplays() {
         updateRegisterPanels();
         updateMemoryDisplay();
+        haltIndicator.setBackground(cpu.getIR() == 0 || cpu.getMFR() != 0 ? Color.RED : Color.GREEN);
     }
 
     private void updateRegisterPanels() {

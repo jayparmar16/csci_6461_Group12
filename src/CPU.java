@@ -1,5 +1,6 @@
 import java.util.HashMap;
 import java.util.Map;
+import java.util.function.Consumer;
 
 public class CPU {
     // Registers
@@ -12,14 +13,24 @@ public class CPU {
     private int mfr; // Machine Fault Register
     private int cc; // Condition Code
 
+    // I/O
+    private Consumer<String> consolePrinter;
+    private int keyboardBuffer = -1;
+
     // Memory & Cache
     private int[] memory = new int[2048];
-    // A simple cache placeholder
     private final Map<Integer, Integer> cache = new HashMap<>();
-
 
     public CPU() {
         reset();
+    }
+
+    public void setConsolePrinter(Consumer<String> printer) {
+        this.consolePrinter = printer;
+    }
+
+    public void setKeyboardBuffer(int value) {
+        this.keyboardBuffer = value;
     }
 
     /**
@@ -47,9 +58,12 @@ public class CPU {
 
     // Single instruction cycle
     public void instructionCycle() {
+        if (mfr != 0) return; // Halt on machine fault
+
         // Fetch phase
         mar = pc;
         mbr = memoryRead(mar);
+        if (mfr != 0) return; // Check for fault during memory read
         ir = mbr;
         pc++;
 
@@ -65,6 +79,7 @@ public class CPU {
         int address = ir & 0b11111;
 
         int effectiveAddress = getEffectiveAddress(ix, address, i);
+        if (mfr != 0) return; // Check for fault during EA calculation
 
         switch (opcode) {
             case 0b000001: // LDR
@@ -77,31 +92,75 @@ public class CPU {
                 mbr = gpr[r];
                 memoryWrite(mar, mbr);
                 break;
+            case 0b000011: // LDA
+                gpr[r] = effectiveAddress;
+                break;
+            case 0b101001: // LDX
+                mar = effectiveAddress;
+                mbr = memoryRead(mar);
+                ixr[ix - 1] = mbr;
+                break;
+            case 0b101010: // STX
+                mar = effectiveAddress;
+                mbr = ixr[ix - 1];
+                memoryWrite(mar, mbr);
+                break;
+            case 0b000100: // AMR
+                mar = effectiveAddress;
+                mbr = memoryRead(mar);
+                gpr[r] += mbr;
+                break;
+            case 0b000101: // SMR
+                mar = effectiveAddress;
+                mbr = memoryRead(mar);
+                gpr[r] -= mbr;
+                break;
+            case 0b011001: // IN
+                if (keyboardBuffer != -1) {
+                    gpr[r] = keyboardBuffer;
+                    keyboardBuffer = -1;
+                } else {
+                    // In a real scenario, this would block. Here we just wait.
+                    // The GUI will handle enabling input.
+                }
+                break;
+            case 0b011010: // OUT
+                if (consolePrinter != null) {
+                    consolePrinter.accept(String.valueOf(gpr[r]));
+                }
+                break;
             case 0b000000: // HLT
-                // Stop execution (handled by GUI)
                 break;
             default:
-                // Handle illegal opcode
                 mfr = 1; // Set Machine Fault: Illegal Operation Code
                 break;
+        }
+        // Check for overflow and set CC
+        if (gpr[r] > 65535 || gpr[r] < -65536) {
+            cc |= (1 << 3); // Set overflow bit
         }
     }
 
     private int getEffectiveAddress(int ix, int address, int i) {
-        if (i == 0) { // No indirect addressing
-            if (ix == 0) { // No indexing
-                return address;
-            } else { // Indexing
-                return ixr[ix - 1] + address;
-            }
-        } else { // Indirect addressing
-            // To be implemented in next commit
-            return 0;
+        int ea;
+        if (ix == 0) { // No indexing
+            ea = address;
+        } else { // Indexing
+            ea = ixr[ix - 1] + address;
         }
+
+        if (i == 1) { // Indirect addressing
+            mar = ea;
+            ea = memoryRead(mar); // The content of ea is the new address
+        }
+        return ea;
     }
 
     public int memoryRead(int address) {
-        // Simple memory read, cache logic to be expanded
+        if (address < 0 || address >= 2048) {
+            mfr = 2; // Illegal Memory Address
+            return 0;
+        }
         if (cache.containsKey(address)) {
             return cache.get(address);
         }
@@ -111,24 +170,57 @@ public class CPU {
     }
 
     public void memoryWrite(int address, int value) {
+        if (address < 0 || address >= 2048) {
+            mfr = 2; // Illegal Memory Address
+            return;
+        }
         memory[address] = value;
         cache.put(address, value);
     }
 
     // Getter methods for GUI to display register values
-    public int getPC() { return pc; }
-    public int getMAR() { return mar; }
-    public int getMBR() { return mbr; }
-    public int getIR() { return ir; }
-    public int getMFR() { return mfr; }
-    public int getCC() { return cc; }
-    public int getGPR(int index) { return gpr[index]; }
-    public int getIXR(int index) { return ixr[index]; }
-    public int getMemory(int address) { return memory[address]; }
+    public int getPC() {
+        return pc;
+    }
+
+    public int getMAR() {
+        return mar;
+    }
+
+    public int getMBR() {
+        return mbr;
+    }
+
+    public int getIR() {
+        return ir;
+    }
+
+    public int getMFR() {
+        return mfr;
+    }
+
+    public int getCC() {
+        return cc;
+    }
+
+    public int getGPR(int index) {
+        return gpr[index];
+    }
+
+    public int getIXR(int index) {
+        return ixr[index];
+    }
+
+    public int getMemory(int address) {
+        return memory[address];
+    }
 
     // Setter for loading program
     public void setMemory(int address, int value) {
         memory[address] = value;
     }
-    public void setPC(int value) { this.pc = value; }
+
+    public void setPC(int value) {
+        this.pc = value;
+    }
 }
