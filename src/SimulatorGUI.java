@@ -49,7 +49,6 @@ public class SimulatorGUI extends JFrame {
         setLocationRelativeTo(null);
         cpu.resetMachine(); // Perform initial reset on startup
         updateAllDisplays();
-        cacheContentArea.setText(""); // Clear cache content on startup
     }
 
     private void setupComponents() {
@@ -90,16 +89,8 @@ public class SimulatorGUI extends JFrame {
         JPanel rightPanel = createRightPanel();
         rightPanel.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
         add(rightPanel, gbc);
-
-        // Bottom Panel (Program File)
-        gbc.gridx = 0;
-        gbc.gridy = 2;
-        gbc.gridwidth = 2;
-        gbc.gridheight = 1;
-        gbc.weightx = 0.5;
-        gbc.weighty = 0.1;
-        // The bottom panel is no longer needed.
-        // add(createBottomPanel(), gbc);
+        
+        // Bottom panel removed
     }
 
     private JPanel createRegisterPanel() {
@@ -114,6 +105,7 @@ public class SimulatorGUI extends JFrame {
         
         // GPR Registers
         for (int i = 0; i < 4; i++) {
+            int index = i; // Create a copy of i
             gbc.gridy = i;
             
             JLabel label = new JLabel("GPR " + i);
@@ -127,7 +119,7 @@ public class SimulatorGUI extends JFrame {
             gbc.weightx = 0.6;
             panel.add(gprTextFields[i], gbc);
             
-            JButton button = createBlueButton();
+            JButton button = createLoadButton(e -> loadRegisterValue("GPR", index));
             gbc.gridx = 2;
             gbc.weightx = 0.2;
             panel.add(button, gbc);
@@ -139,6 +131,7 @@ public class SimulatorGUI extends JFrame {
 
         // IXR Registers
         for (int i = 0; i < 3; i++) {
+            int index = i; // Create a copy of i
             gbc.gridy = i + 5;
             
             JLabel label = new JLabel("IXR " + (i + 1));
@@ -152,7 +145,7 @@ public class SimulatorGUI extends JFrame {
             gbc.weightx = 0.6;
             panel.add(ixrTextFields[i], gbc);
             
-            JButton button = createBlueButton();
+            JButton button = createLoadButton(e -> loadRegisterValue("IXR", index));
             gbc.gridx = 2;
             gbc.weightx = 0.2;
             panel.add(button, gbc);
@@ -229,7 +222,8 @@ public class SimulatorGUI extends JFrame {
         gbc.gridy = 3;
         gbc.gridx = 0; panel.add(new JLabel("IR"), gbc);
         gbc.gridx = 1; panel.add(irTextField, gbc);
-        gbc.gridx = 2; panel.add(createLoadButton(e -> loadRegisterValue("IR", 0)), gbc);
+        // IR is not meant to be loaded
+        gbc.gridx = 2; panel.add(createBlueButton()); 
 
         return panel;
     }
@@ -382,36 +376,54 @@ public class SimulatorGUI extends JFrame {
         return panel;
     }
 
+    /**
+     * Appends a log message to the printer area with a newline.
+     * Use this for simulator messages, not for the OUT instruction.
+     * @param text The log message.
+     */
     public void appendToPrinter(String text) {
         printerArea.append(text + "\n");
         printerArea.setCaretPosition(printerArea.getDocument().getLength());
     }
     
+    /**
+     * === NEW: Appends text to the printer area *without* a newline. ===
+     * This is for the OUT instruction to use.
+     * @param text The character or string to print.
+     */
+    public void printToConsole(String text) {
+        printerArea.append(text);
+        printerArea.setCaretPosition(printerArea.getDocument().getLength());
+    }
+
+    /**
+     * === NEW: Clears the printer area. ===
+     */
     public void clearPrinter() {
         printerArea.setText("");
     }
 
-    // This method is no longer needed as the panel has been removed.
-    /*
-    private JPanel createBottomPanel() {
-        JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        panel.add(new JLabel("Program File"));
-        panel.add(programFileTextField);
-        JButton loadButton = new JButton("Select File");
-        loadButton.addActionListener(e -> assembleFile());
-        panel.add(loadButton);
-        programFileTextField.setEditable(false);
-        return panel;
-    }
-    */
-
     private void addListeners() {
+        // Octal Input field listener
         octalInputField.addKeyListener(new KeyAdapter() {
             @Override
             public void keyReleased(KeyEvent e) {
                 updateBinaryDisplayFromOctalInput();
             }
         });
+        
+        // === NEW: Console Input field listener ===
+        // Triggers when the user presses Enter in the console input box
+        consoleInputTextField.addActionListener(e -> {
+            String text = consoleInputTextField.getText();
+            if (!text.isEmpty()) {
+                // Send the input text to the CPU
+                cpu.submitConsoleInput(text);
+                // Clear the input field
+                consoleInputTextField.setText("");
+            }
+        });
+        // =========================================
     }
 
     private void updateBinaryDisplayFromOctalInput() {
@@ -436,8 +448,13 @@ public class SimulatorGUI extends JFrame {
     public void handleButtonPress(String command) {
         try {
             System.out.println("\n=== Button Press: " + command + " ===");
-            short octalValue = cpu.getUtils().octalToShort(octalInputField.getText());
-            System.out.printf("Octal Input Value: %06o\n", octalValue);
+            
+            // Only parse octal value if needed
+            short octalValue = 0;
+            if (command.equals("Load") || command.equals("Load+") || command.equals("Store") || command.equals("Store+")) {
+                 octalValue = cpu.getUtils().octalToShort(octalInputField.getText());
+                 System.out.printf("Octal Input Value: %06o\n", octalValue);
+            }
             
             switch (command) {
                 case "Load" -> {
@@ -487,37 +504,12 @@ public class SimulatorGUI extends JFrame {
             cpu.ipl(programFile); // Pass the selected file to the CPU's IPL process
         }
     }
-    
-    // This method is no longer needed.
-    /*
-    private void assembleFile() {
-        JFileChooser fileChooser = new JFileChooser(".");
-        fileChooser.setDialogTitle("Select Load File");
-        fileChooser.setDialogType(JFileChooser.OPEN_DIALOG);
-        if (fileChooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
-            File loadFile = fileChooser.getSelectedFile();
-            programFileTextField.setText(loadFile.getAbsolutePath());
-            System.out.println("\n=== Selected Program File ===");
-            System.out.println("File: " + loadFile.getName());
-            System.out.println("Path: " + loadFile.getAbsolutePath());
-            
-            // Load the program immediately
-            cpu.loadProgram(loadFile.getAbsolutePath());
-            updateAllDisplays(); // Update GUI to show new register states
-        }
-    }
-    */
-    
-    // This method is no longer needed.
-    /*
-    public String getProgramFileName() {
-        return programFileTextField.getText();
-    }
-    */
 
     public void updateAllDisplays() {
+        // === MODIFIED: Call updateCacheView ===
         updateRegisters();
-        // updateMemoryView();
+        updateCacheView();
+        // ======================================
     }
 
     public void updateRegisters() {
@@ -531,9 +523,15 @@ public class SimulatorGUI extends JFrame {
         mfrTextField.setText(cpu.getUtils().shortToBinary(cpu.getMFR(), 4));
     }
 
-    public void updateMemoryView() {
-        // cacheContentArea.setText(cpu.getFormattedMemory());
+    /**
+     * === NEW: Renamed and implemented this method ===
+     * Updates the Cache Content display area.
+     */
+    public void updateCacheView() {
+        cacheContentArea.setText(cpu.getFormattedCache());
+        cacheContentArea.setCaretPosition(0); // Scroll to top
     }
+    // ===========================================
 
     public void showError(String title, String message) {
         JOptionPane.showMessageDialog(this, message, title, JOptionPane.ERROR_MESSAGE);
@@ -565,7 +563,7 @@ public class SimulatorGUI extends JFrame {
                 case "PC" -> cpu.setPC(value);
                 case "MAR" -> cpu.setMAR(value);
                 case "MBR" -> cpu.setMBR(value);
-                case "IR" -> cpu.setIR(value);
+                // case "IR" -> cpu.setIR(value); // Don't allow loading IR
             }
 
             updateAllDisplays();

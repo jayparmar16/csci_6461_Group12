@@ -19,6 +19,12 @@ public class CPU {
 
     // Memory
     private final short[] memory = new short[2048];
+    
+    // === NEW: Cache and I/O Components ===
+    private final Cache cache;
+    private String kbdBuffer = "";
+    private boolean isWaitingForInput = false;
+    // ===================================
 
     // Fault Codes
     private static final short FAULT_ILLEGAL_MEM_ADDR = 1; // 0001
@@ -32,6 +38,8 @@ public class CPU {
 
     public CPU(SimulatorGUI gui) {
         this.gui = gui;
+        // === NEW: Initialize the Cache ===
+        this.cache = new Cache(this.memory, this.gui, this.utils);
     }
 
     public void ipl(File programFile) {
@@ -55,6 +63,14 @@ public class CPU {
         for (int i = 0; i < 4; i++) gpr[i] = 0;
         for (int i = 0; i < 4; i++) ixr[i] = 0;
         pc = mar = mbr = ir = mfr = cc = 0;
+        
+        // === NEW: Clear Cache and I/O State ===
+        cache.invalidate();
+        kbdBuffer = "";
+        isWaitingForInput = false;
+        gui.clearPrinter(); // Clear the printer on reset
+        // ======================================
+        
         isHalted = false;
     }
     
@@ -75,8 +91,8 @@ public class CPU {
                         short value = (short) Integer.parseInt(parts[1], 8);
                         
                         if (address >= 0 && address < memory.length) {
-                            memory[address] = value;
-                            // Console log to verify memory storage
+                            // Load directly into main memory, bypassing cache
+                            memory[address] = value; 
                             System.out.printf("Loaded memory[%04o] with value %06o\n", address, value);
                             if (firstAddress == -1) {
                                 firstAddress = (short) address;
@@ -90,6 +106,9 @@ public class CPU {
                 }
             }
             
+            // === NEW: Invalidate cache after loading program ===
+            cache.invalidate();
+            // =================================================
 
             if (firstAddress != -1) {
                 pc = firstAddress; // Set PC to the address of the very first instruction loaded
@@ -132,14 +151,17 @@ public class CPU {
                                     pc, mar, mbr, ir,
                                     gpr[0], gpr[1], gpr[2], gpr[3],
                                     ixr[1], ixr[2], ixr[3]);
-        gui.appendToPrinter(status);
+        // gui.appendToPrinter(status); // This is too noisy, let's keep it in the console
+        System.out.println(status);
         gui.updateAllDisplays();
     }
 
     public void load(short address) {
         mar = address;
         if (checkMemoryFault(mar)) return;
-        mbr = memory[mar];
+        // === MODIFIED: Use Cache ===
+        mbr = cache.read(mar);
+        // ===========================
         gui.updateAllDisplays();
     }
 
@@ -152,7 +174,9 @@ public class CPU {
     public void store(short address) {
         mar = address;
         if (checkMemoryFault(mar)) return;
-        memory[mar] = mbr;
+        // === MODIFIED: Use Cache ===
+        cache.write(mar, mbr);
+        // ===========================
         gui.updateAllDisplays();
     }
 
@@ -166,13 +190,16 @@ public class CPU {
         // 1. Fetch instruction using current PC
         mar = pc;
         if (checkMemoryFault(mar)) return;
-        mbr = memory[mar];
+        
+        // === MODIFIED: Use Cache for instruction fetch ===
+        mbr = cache.read(mar);
+        // ===============================================
         ir = mbr;
         
         // 2. Increment PC for next instruction
         pc++;
         
-        // Decode instruction fields
+        // Decode instruction fields (Common Load/Store Format)
         int opcode = (ir >>> 10) & 0x3F; // Bits 15-10
         int r      = (ir >>> 8)  & 0x3;  // Bits 9-8
         int ix     = (ir >>> 6)  & 0x3;  // Bits 7-6
@@ -184,31 +211,52 @@ public class CPU {
         gui.appendToPrinter(String.format("Location: %06o  Instruction: %06o", mar, ir));
         gui.appendToPrinter("Decoded fields (octal):");
         gui.appendToPrinter(String.format("  Opcode: %02o", opcode));
-        gui.appendToPrinter(String.format("  R: %o", r));
-        gui.appendToPrinter(String.format("  IX: %o", ix));
-        gui.appendToPrinter(String.format("  I: %o", i));
-        gui.appendToPrinter(String.format("  Address: %o", address));
         
         // 4. Execute based on opcode
-        // Effective Address Calculation
+        // Effective Address Calculation (only for relevant instructions)
         int effectiveAddr = address;
-        if (ix > 0 && ix < 4) {
-            // BUG FIX: The log message was misleading because it printed after calculation.
-            // Let's log the values BEFORE we do the math.
-            short ixrValue = ixr[ix];
-            gui.appendToPrinter(String.format("Using IX%d: base %o + ixr %o", ix, address, ixrValue));
-            effectiveAddr += ixrValue;
+        
+        // EA logic is not needed for HLT, RFS, AIR, SIR, MLT, DVD, TRR, AND, ORR, NOT, SRC, RRC, IN, OUT, CHK
+        // Only calculate EA if it's a memory-addressing instruction
+        switch(opcode) {
+             case 1: // LDR
+             case 2: // STR
+             case 3: // LDA
+             case 4: // AMR
+             case 5: // SMR
+             case 8: // JZ
+             case 9: // JNE
+             case 10: // JCC
+             case 11: // JMA
+             case 12: // JSR
+             case 14: // SOB
+             case 15: // JGE
+             case 33: // LDX
+             case 34: // STX
+                gui.appendToPrinter(String.format("  R: %o, IX: %o, I: %o, Addr: %o", r, ix, i, address));
+                if (ix > 0 && ix < 4) {
+                    short ixrValue = ixr[ix];
+                    gui.appendToPrinter(String.format("Using IX%d: base %o + ixr %o", ix, address, ixrValue));
+                    effectiveAddr += ixrValue;
+                }
+
+                if (i == 1) { // Indirect Addressing
+                    if (!checkMemoryFault((short)effectiveAddr)) {
+                        gui.appendToPrinter(String.format("Indirect addressing used. Getting final EA from memory[%06o]", effectiveAddr));
+                        // === MODIFIED: Use Cache for indirect fetch ===
+                        effectiveAddr = cache.read((short)effectiveAddr);
+                        // ============================================
+                    } else {
+                        return; // Fault occurred
+                    }
+                }
+                System.out.printf("Final Effective Address: %06o\n", effectiveAddr);
+                break;
+             default:
+                // This instruction doesn't use the standard R,IX,I,Addr format
+                break;
         }
 
-        if (i == 1) { // Indirect Addressing
-            if (!checkMemoryFault((short)effectiveAddr)) {
-                gui.appendToPrinter(String.format("Indirect addressing used. Getting final EA from memory[%06o]", effectiveAddr));
-                effectiveAddr = memory[effectiveAddr];
-            } else {
-                return; // Fault occurred
-            }
-        }
-        System.out.printf("Final Effective Address: %06o\n", effectiveAddr);
 
         switch(opcode) {
             case 0: // HLT
@@ -218,17 +266,18 @@ public class CPU {
                 
             case 1: // LDR
                 if (!checkMemoryFault((short)effectiveAddr)) {
-                    mar = (short)effectiveAddr;
-                    mbr = memory[effectiveAddr];
-                    gpr[r] = mbr;
+                    // === MODIFIED: Use Cache ===
+                    gpr[r] = cache.read((short)effectiveAddr);
+                    // ===========================
                 }
                 break;
                 
             case 2: // STR
                 if (!checkMemoryFault((short)effectiveAddr)) {
-                    mar = (short)effectiveAddr;
-                    mbr = gpr[r];
-                    memory[effectiveAddr] = mbr;
+                    // === MODIFIED: Use Cache ===
+                    mbr = gpr[r]; // MBR gets value to be stored
+                    cache.write((short)effectiveAddr, mbr);
+                    // ===========================
                 }
                 break;
                 
@@ -238,25 +287,31 @@ public class CPU {
 
             case 4: // AMR - Add Memory to Register
                 if (!checkMemoryFault((short)effectiveAddr)) {
-                    mar = (short)effectiveAddr;
-                    mbr = memory[effectiveAddr];
+                    // === MODIFIED: Use Cache ===
+                    mbr = cache.read((short)effectiveAddr);
+                    // ===========================
                     gpr[r] += mbr;
                 }
                 break;
 
             case 5: // SMR - Subtract Memory from Register
                 if (!checkMemoryFault((short)effectiveAddr)) {
-                    mar = (short)effectiveAddr;
-                    mbr = memory[effectiveAddr];
+                    // === MODIFIED: Use Cache ===
+                    mbr = cache.read((short)effectiveAddr);
+                    // ===========================
                     gpr[r] -= mbr;
                 }
                 break;
 
             case 6: // AIR - Add Immediate to Register
+                // For AIR/SIR, 'address' field (5 bits) is the immediate value
+                gui.appendToPrinter(String.format("  R: %o, Immed: %o", r, address));
                 gpr[r] += address;
                 break;
 
             case 7: // SIR - Subtract Immediate from Register
+                // For AIR/SIR, 'address' field (5 bits) is the immediate value
+                gui.appendToPrinter(String.format("  R: %o, Immed: %o", r, address));
                 gpr[r] -= address;
                 break;
 
@@ -286,7 +341,7 @@ public class CPU {
 
             case 13: // RFS - Return From Subroutine
                 pc = gpr[3]; // Return to saved address
-                gpr[0] = (short)address; // Load R0 with immediate value
+                gpr[0] = (short)address; // Load R0 with immediate value (from 5-bit address field)
                 break;
 
             case 14: // SOB - Subtract One and Branch
@@ -301,11 +356,11 @@ public class CPU {
             // ISA Opcode for LDX is 41 octal = 33 decimal
             case 33: // LDX - Load Index Register from Memory
                  if (!checkMemoryFault((short)effectiveAddr)) {
-                    mar = (short)effectiveAddr;
-                    mbr = memory[effectiveAddr];
                     // The 'ix' field specifies the target register for LDX/STX
                     if (ix > 0) {
-                        ixr[ix] = mbr;
+                        // === MODIFIED: Use Cache ===
+                        ixr[ix] = cache.read((short)effectiveAddr);
+                        // ===========================
                     }
                 }
                 break;
@@ -313,11 +368,12 @@ public class CPU {
             // ISA Opcode for STX is 42 octal = 34 decimal
             case 34: // STX - Store Index Register to Memory
                 if (!checkMemoryFault((short)effectiveAddr)) {
-                    mar = (short)effectiveAddr;
                     // The 'ix' field specifies the source register for STX
                     if (ix > 0) {
                          mbr = ixr[ix];
-                         memory[effectiveAddr] = mbr;
+                         // === MODIFIED: Use Cache ===
+                         cache.write((short)effectiveAddr, mbr);
+                         // ===========================
                     }
                 }
                 break;
@@ -343,62 +399,125 @@ public class CPU {
                 break;
 
             case 25: // SRC - Shift Register by Count
-                int count = address & 0xF;       // Get count from bits 3-0
-                boolean left = (address & 0x10) != 0;  // Get direction from bit 4
-                boolean logical = (i == 0);      // Get shift type from I bit
+                // Shift format: Op(6), R(2), A/L(1), L/R(1), Count(4)
+                // CPU decode: Op(6), R(2), IX(2), I(1), Address(5)
+                // This implies A/L+L/R are in IX, and Count is in Address
+                // Let's fix this based on Assembler.java:
+                // machineCode = (opcode << 10) | (r << 8) | (al << 7) | (lr << 6) | count;
+                
+                int count = ir & 0x1F;        // Bits 4-0
+                int lr    = (ir >>> 6) & 0x1; // Bit 6 (Left/Right)
+                int al    = (ir >>> 7) & 0x1; // Bit 7 (Arith/Logic)
+                boolean left = (lr == 1);
+                boolean logical = (al == 1);
+                
+                gui.appendToPrinter(String.format("  R: %o, A/L: %o, L/R: %o, Count: %d", r, al, lr, count));
                 
                 if (left) {
                     if (logical) {
                         gpr[r] = (short)(gpr[r] << count);
-                    } else {
+                    } else { // Arithmetic
                         gpr[r] = (short)(gpr[r] << count);
                     }
-                    System.out.printf("SRC - Shifted GPR%d left by %d (%s) = %06o\n", 
-                                    r, count, logical ? "logical" : "arithmetic", gpr[r]);
-                } else {
+                } else { // Right
                     if (logical) {
                         gpr[r] = (short)((gpr[r] & 0xFFFF) >>> count);
-                    } else {
+                    } else { // Arithmetic
                         gpr[r] = (short)(gpr[r] >> count);
                     }
-                    System.out.printf("SRC - Shifted GPR%d right by %d (%s) = %06o\n", 
-                                    r, count, logical ? "logical" : "arithmetic", gpr[r]);
                 }
                 break;
 
             case 26: // RRC - Rotate Register by Count
-                count = address & 0xF;       // Get count from bits 3-0
-                left = (address & 0x10) != 0;  // Get direction from bit 4
+                // Same format as SRC
+                count = ir & 0x1F;        // Bits 4-0
+                lr    = (ir >>> 6) & 0x1; // Bit 6 (Left/Right)
+                al    = (ir >>> 7) & 0x1; // Bit 7 (Arith/Logic) -> Not used by RRC per ISA
+                left = (lr == 1);
                 short val = gpr[r];
+
+                gui.appendToPrinter(String.format("  R: %o, L/R: %o, Count: %d", r, lr, count));
                 
-                if (left) {
-                    gpr[r] = (short)((val << count) | ((val & 0xFFFF) >>> (16 - count)));
-                    System.out.printf("RRC - Rotated GPR%d left by %d = %06o\n", 
-                                    r, count, gpr[r]);
-                } else {
-                    gpr[r] = (short)(((val & 0xFFFF) >>> count) | (val << (16 - count)));
-                    System.out.printf("RRC - Rotated GPR%d right by %d = %06o\n", 
-                                    r, count, gpr[r]);
+                if (count > 0) {
+                    count %= 16; // Handle excessive rotates
+                    if (left) {
+                        gpr[r] = (short)((val << count) | ((val & 0xFFFF) >>> (16 - count)));
+                    } else { // Right
+                        gpr[r] = (short)(((val & 0xFFFF) >>> count) | (val << (16 - count)));
+                    }
                 }
                 break;
 
             case 24: // TRAP
                 throw new Exception("TRAP instruction not yet implemented");
 
+            // === NEW: I/O Instruction Implementation ===
+            
+            // ISA Opcode for IN is 61 octal = 49 decimal
             case 49: // IN - Input from Device
-                // r contains device ID
-                // effectiveAddr contains the word count
-                throw new Exception("IN instruction not yet implemented");
+            {
+                // Format: Op(6), R(2), DevID(8)
+                // DevID is in the lower 8 bits (per Assembler.java)
+                int devId = ir & 0xFF; 
+                gui.appendToPrinter(String.format("  R: %o, DevID: %d", r, devId));
 
+                if (devId == 0) { // Console Keyboard
+                    if (kbdBuffer.isEmpty()) {
+                        // Wait for input
+                        isWaitingForInput = true;
+                        pc--; // Re-execute this instruction
+                        gui.appendToPrinter("Program is waiting for input from Console Keyboard...");
+                        gui.updateAllDisplays();
+                        return; // Stop execution cycle
+                    } else {
+                        // Input is available
+                        char c = kbdBuffer.charAt(0);
+                        kbdBuffer = kbdBuffer.substring(1);
+                        gpr[r] = (short) c;
+                        gui.appendToPrinter("Read char '" + c + "' from keyboard into GPR" + r);
+                    }
+                } else {
+                    gui.appendToPrinter("Warning: IN from unimplemented device " + devId);
+                    gpr[r] = 0; // Return 0 for other devices
+                }
+                break;
+            }
+
+            // ISA Opcode for OUT is 62 octal = 50 decimal
             case 50: // OUT - Output to Device
-                // r contains device ID
-                // effectiveAddr contains the word count
-                throw new Exception("OUT instruction not yet implemented");
+            {
+                int devId = ir & 0xFF;
+                gui.appendToPrinter(String.format("  R: %o, DevID: %d", r, devId));
+                
+                if (devId == 1) { // Console Printer
+                    // Output the lower 8 bits of the register as a character
+                    char c = (char) (gpr[r] & 0xFF);
+                    gui.printToConsole(String.valueOf(c)); // Use new method
+                } else {
+                    gui.appendToPrinter("Warning: OUT to unimplemented device " + devId);
+                }
+                break;
+            }
 
+            // ISA Opcode for CHK is 63 octal = 51 decimal
             case 51: // CHK - Check Device Status
-                // r contains device ID
-                // effectiveAddr is ignored
-                throw new Exception("CHK instruction not yet implemented");
+            {
+                int devId = ir & 0xFF;
+                gui.appendToPrinter(String.format("  R: %o, DevID: %d", r, devId));
+
+                gpr[r] = 0; // Default status = 0
+                if (devId == 0) { // Console Keyboard
+                    // Set GPR[r] to 1 if input is available, 0 otherwise
+                    gpr[r] = kbdBuffer.isEmpty() ? (short)0 : (short)1;
+                } else if (devId == 1) { // Console Printer
+                    // Set GPR[r] to 1 (always ready)
+                    gpr[r] = 1;
+                } else {
+                    gui.appendToPrinter("Warning: CHK for unimplemented device " + devId);
+                }
+                break;
+            }
+            // =======================================
 
             default:
                 mfr = FAULT_ILLEGAL_OPCODE;
@@ -406,20 +525,33 @@ public class CPU {
                 throw new Exception(String.format("Unimplemented or Illegal Instruction - Opcode: %02o", opcode));
         }
         
-        gui.updateAllDisplays();
-        printRegisterState(); // Use console for detailed state log
+        // Update GUI and logs *after* successful execution
+        updateDisplayAndLog();
     }
 
     public void runProgram() {
+        // === MODIFIED: Don't run if waiting for input ===
+        if (isWaitingForInput) {
+             gui.appendToPrinter("Machine is waiting for input. Cannot run.");
+             return;
+        }
+        
         if (!isHalted && (runWorker == null || runWorker.isDone())) {
             runWorker = new SwingWorker<Void, Void>() {
                 @Override
                 protected Void doInBackground() {
-                    while (!isHalted && !isCancelled()) {
-                        singleStep();
+                    // === MODIFIED: Check for halt/cancel/wait ===
+                    while (!isHalted && !isCancelled() && !isWaitingForInput) {
+                        singleStep(); // This will update isHalted or isWaitingForInput
+                        
+                        // Check again after step
+                        if (isHalted || isWaitingForInput) {
+                            break;
+                        }
+
                         try {
-                            Thread.sleep(100);
-                            SwingUtilities.invokeLater(() -> gui.updateAllDisplays());
+                            Thread.sleep(10); // Reduced sleep time for faster execution
+                            // SwingUtilities.invokeLater(() -> gui.updateAllDisplays()); // Too slow, update at end
                         } catch (InterruptedException e) {
                             Thread.currentThread().interrupt();
                             break;
@@ -431,17 +563,37 @@ public class CPU {
                 @Override
                 protected void done() {
                     if (isHalted) {
-                        System.out.println("Program execution completed.");
+                        System.out.println("Program execution completed or halted.");
                     }
+                    if (isWaitingForInput) {
+                         System.out.println("Program execution paused for input.");
+                    }
+                    // Final update
+                    SwingUtilities.invokeLater(() -> gui.updateAllDisplays());
                 }
             };
             runWorker.execute();
         }
     }
+    
+    // === NEW: Public method for GUI to submit input ===
+    public void submitConsoleInput(String text) {
+        this.kbdBuffer += text + "\n"; // Add newline as programs expect it
+        if (isWaitingForInput) {
+            isWaitingForInput = false;
+            gui.appendToPrinter("-> Input '" + text + "' received. Press Run or Step to continue.");
+        }
+    }
+    // ================================================
 
     public void singleStep() {
         if (isHalted) {
             gui.appendToPrinter("Machine is halted. Press IPL to restart.");
+            return;
+        }
+        // === NEW: Check for input wait ===
+        if (isWaitingForInput) {
+            gui.appendToPrinter("Machine is waiting for input. Cannot step.");
             return;
         }
 
@@ -471,29 +623,26 @@ public class CPU {
             return true;
         }
 
-        // For loading programs, we need to check if we're writing to reserved memory
+        // Check for *writes* to reserved memory (0-5)
+        // Note: The prompt's program needs to read/write data. Let's relax this check
+        // to a warning, as the original code did.
         if (address >= RESERVED_MEM_START && address <= RESERVED_MEM_END) {
-            String purpose;
-            switch (address) {
-                case 0 -> purpose = "Trap Instruction Vector Table";
-                case 1 -> purpose = "Machine Fault Handler Address";
-                case 2 -> purpose = "Trap PC Storage";
-                case 3 -> purpose = "Reserved (Not Used)";
-                case 4 -> purpose = "Machine Fault PC Storage";
-                case 5 -> purpose = "Reserved (Not Used)";
-                default -> purpose = "Reserved";
-            }
-            gui.appendToPrinter(String.format("WARNING: Accessing Reserved Location %d (%s)", address, purpose));
+            gui.appendToPrinter(String.format("WARNING: Accessing Reserved Location %d", address));
         }
         return false;
     }
 
+    // === NEW: Getter for formatted cache content ===
+    public String getFormattedCache() {
+        return cache.getFormattedCache();
+    }
+    
     public String getFormattedMemory() {
+        // This is still useful for a full memory dump if needed
+        // But the main display will be the cache
         StringBuilder sb = new StringBuilder();
-        // Show more memory locations, including the ones from your program
         for (int i = 0; i < 2048; i += 8) {
             boolean hasNonZero = false;
-            // Check if this row has any non-zero values
             for (int j = 0; j < 8 && (i + j) < 2048; j++) {
                 if (memory[i + j] != 0) {
                     hasNonZero = true;
@@ -501,7 +650,6 @@ public class CPU {
                 }
             }
             
-            // Only show rows that have non-zero values or are in the first few rows
             if (hasNonZero || i < 32) {
                 sb.append(String.format("%04o: ", i));
                 for (int j = 0; j < 8 && (i + j) < 2048; j++) {
