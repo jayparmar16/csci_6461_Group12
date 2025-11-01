@@ -196,64 +196,105 @@ public class CPU {
         // ===============================================
         ir = mbr;
         
+        // // 2. Increment PC for next instruction
+        // pc++;
+        
+        // // Decode instruction fields (Common Load/Store Format)
+        // int opcode = (ir >>> 10) & 0x3F; // Bits 15-10
+        // int r      = (ir >>> 8)  & 0x3;  // Bits 9-8
+        // int ix     = (ir >>> 6)  & 0x3;  // Bits 7-6
+        // int i      = (ir >>> 5)  & 0x1;  // Bit 5
+        // int address = ir & 0xFF;         // Bits 4-0
+        
+        // // Log instruction details
+        // gui.appendToPrinter("=== Instruction Execution ===");
+        // gui.appendToPrinter(String.format("Location: %06o  Instruction: %06o", mar, ir));
+        // gui.appendToPrinter("Decoded fields (octal):");
+        // gui.appendToPrinter(String.format("  Opcode: %02o", opcode));
+        
+        // // 4. Execute based on opcode
+        // // Effective Address Calculation (only for relevant instructions)
+        // int effectiveAddr = address;
+        
+        // // EA logic is not needed for HLT, RFS, AIR, SIR, MLT, DVD, TRR, AND, ORR, NOT, SRC, RRC, IN, OUT, CHK
+        // // Only calculate EA if it's a memory-addressing instruction
+        // switch(opcode) {
+        //      case 1: // LDR
+        //      case 2: // STR
+        //      case 3: // LDA
+        //      case 4: // AMR
+        //      case 5: // SMR
+        //      case 8: // JZ
+        //      case 9: // JNE
+        //      case 10: // JCC
+        //      case 11: // JMA
+        //      case 12: // JSR
+        //      case 14: // SOB
+        //      case 15: // JGE
+        //      case 33: // LDX
+        //      case 34: // STX
+        //         gui.appendToPrinter(String.format("  R: %o, IX: %o, I: %o, Addr: %o", r, ix, i, address));
+        //         if (ix > 0 && ix < 4) {
+        //             short ixrValue = ixr[ix];
+        //             gui.appendToPrinter(String.format("Using IX%d: base %o + ixr %o", ix, address, ixrValue));
+        //             effectiveAddr += ixrValue;
+        //         }
+
+        //         if (i == 1) { // Indirect Addressing
+        //             if (!checkMemoryFault((short)effectiveAddr)) {
+        //                 gui.appendToPrinter(String.format("Indirect addressing used. Getting final EA from memory[%06o]", effectiveAddr));
+        //                 // === MODIFIED: Use Cache for indirect fetch ===
+        //                 effectiveAddr = cache.read((short)effectiveAddr);
+        //                 // ============================================
+        //             } else {
+        //                 return; // Fault occurred
+        //             }
+        //         }
+        //         System.out.printf("Final Effective Address: %06o\n", effectiveAddr);
+        //         break;
+        //      default:
+        //         // This instruction doesn't use the standard R,IX,I,Addr format
+        //         break;
+        // }
+
         // 2. Increment PC for next instruction
         pc++;
-        
-        // Decode instruction fields (Common Load/Store Format)
-        int opcode = (ir >>> 10) & 0x3F; // Bits 15-10
-        int r      = (ir >>> 8)  & 0x3;  // Bits 9-8
-        int ix     = (ir >>> 6)  & 0x3;  // Bits 7-6
-        int i      = (ir >>> 5)  & 0x1;  // Bit 5
-        int address = ir & 0x1F;         // Bits 4-0
-        
+
+        // Decode instruction fields (NEW 8-BIT ADDRESS FORMAT)
+        int opcode = (ir >>> 10) & 0x3F; // Bits 15-10 (6 bits)
+        int r      = (ir >>> 8)  & 0x3;  // Bits 9-8  (2 bits)
+        int address = ir & 0xFF;         // Bits 7-0  (8 bits)
+
+        // These fields are no longer used in this design
+        int ix     = 0;
+        int i      = 0;
+
         // Log instruction details
         gui.appendToPrinter("=== Instruction Execution ===");
         gui.appendToPrinter(String.format("Location: %06o  Instruction: %06o", mar, ir));
         gui.appendToPrinter("Decoded fields (octal):");
-        gui.appendToPrinter(String.format("  Opcode: %02o", opcode));
-        
+
         // 4. Execute based on opcode
         // Effective Address Calculation (only for relevant instructions)
         int effectiveAddr = address;
-        
-        // EA logic is not needed for HLT, RFS, AIR, SIR, MLT, DVD, TRR, AND, ORR, NOT, SRC, RRC, IN, OUT, CHK
-        // Only calculate EA if it's a memory-addressing instruction
-        switch(opcode) {
-             case 1: // LDR
-             case 2: // STR
-             case 3: // LDA
-             case 4: // AMR
-             case 5: // SMR
-             case 8: // JZ
-             case 9: // JNE
-             case 10: // JCC
-             case 11: // JMA
-             case 12: // JSR
-             case 14: // SOB
-             case 15: // JGE
-             case 33: // LDX
-             case 34: // STX
-                gui.appendToPrinter(String.format("  R: %o, IX: %o, I: %o, Addr: %o", r, ix, i, address));
-                if (ix > 0 && ix < 4) {
-                    short ixrValue = ixr[ix];
-                    gui.appendToPrinter(String.format("Using IX%d: base %o + ixr %o", ix, address, ixrValue));
-                    effectiveAddr += ixrValue;
-                }
 
-                if (i == 1) { // Indirect Addressing
-                    if (!checkMemoryFault((short)effectiveAddr)) {
-                        gui.appendToPrinter(String.format("Indirect addressing used. Getting final EA from memory[%06o]", effectiveAddr));
-                        // === MODIFIED: Use Cache for indirect fetch ===
-                        effectiveAddr = cache.read((short)effectiveAddr);
-                        // ============================================
-                    } else {
-                        return; // Fault occurred
-                    }
-                }
-                System.out.printf("Final Effective Address: %06o\n", effectiveAddr);
-                break;
-             default:
-                // This instruction doesn't use the standard R,IX,I,Addr format
+        // This switch now only needs to log R and Address
+        switch(opcode) {
+            case 1: // LDR
+            case 2: // STR
+            case 3: // LDA
+            case 4: // AMR
+            case 5: // SMR
+            case 8: // JZ
+            case 9: // JNE
+            case 10: // JCC
+            case 11: // JMA
+            case 12: // JSR
+            case 14: // SOB
+            case 15: // JGE
+            case 33: // LDX
+            case 34: // STX
+                gui.appendToPrinter(String.format("  Opcode: %02o, R: %o, Addr: %03o", opcode, r, address));
                 break;
         }
 
@@ -398,6 +439,12 @@ public class CPU {
                 // implementation removed for brevity
                 break;
 
+            // ISA Opcode for NOT is 75 octal = 61 decimal
+            case 61: // NOT
+                // Format: Op(6), R(2), ...
+                gui.appendToPrinter(String.format("  R: %o", r));
+                gpr[r] = (short)(~gpr[r]); // Perform bitwise NOT
+                break;
             case 25: // SRC - Shift Register by Count
                 // Shift format: Op(6), R(2), A/L(1), L/R(1), Count(4)
                 // CPU decode: Op(6), R(2), IX(2), I(1), Address(5)
