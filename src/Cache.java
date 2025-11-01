@@ -76,4 +76,66 @@ public class Cache {
 
         return dataFromMem;
     }
+
+    /**
+     * Writes a word to a given memory address using a Write-Through policy.
+     *
+     * @param address The 11-bit memory address to write to.
+     * @param data The 16-bit data word to write.
+     */
+    public void write(short address, short data) {
+        short tag = address;
+        
+        // 1. Write-Through: Always write data to main memory.
+        mainMemory[address] = data;
+
+        // 2. Check if the block is in the cache (Cache Hit)
+        for (int i = 0; i < CACHE_SIZE; i++) {
+            if (lines[i].valid && lines[i].tag == tag) {
+                // 3a. Cache Hit: Update the data in the cache as well.
+                gui.appendToPrinter("-> CACHE HIT (Write) @ " + utils.shortToOctal(address, 4));
+                lines[i].data = data;
+                return;
+            }
+        }
+
+        // 3b. Cache Miss (Write-Around): Do nothing. The block is not loaded on a write miss.
+        gui.appendToPrinter("-> CACHE MISS (Write) @ " + utils.shortToOctal(address, 4) + ". (Write-Through only)");
+    }
+
+    /**
+     * Invalidates all lines in the cache.
+     * Called during IPL or Reset.
+     */
+    public void invalidate() {
+        for (int i = 0; i < CACHE_SIZE; i++) {
+            lines[i].valid = false;
+        }
+        fifoPointer = 0;
+        gui.appendToPrinter("Cache invalidated.");
+    }
+
+    /**
+     * Generates a formatted string representing the current state of the cache.
+     *
+     * @return A string for display in the GUI.
+     */
+    public String getFormattedCache() {
+        StringBuilder sb = new StringBuilder();
+        sb.append(String.format("FIFO Pointer -> Line %d\n", fifoPointer));
+        sb.append("----------------------------------\n");
+        sb.append("LN | V | TAG (OCT) | DATA (OCT)\n");
+        sb.append("----------------------------------\n");
+
+        for (int i = 0; i < CACHE_SIZE; i++) {
+            CacheLine line = lines[i];
+            sb.append(String.format("%02d | %s | %-9s | %-10s\n",
+                    i,
+                    line.valid ? "1" : "0",
+                    line.valid ? utils.shortToOctal(line.tag, 4) : "-",
+                    line.valid ? utils.shortToOctal(line.data, 6) : "-"
+            ));
+        }
+        return sb.toString();
+    }
 }
