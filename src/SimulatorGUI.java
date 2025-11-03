@@ -13,6 +13,7 @@ import java.awt.event.ActionListener;
 public class SimulatorGUI extends JFrame {
 
     private final CPU cpu;
+    private final StringBuilder consoleOut = new StringBuilder();
 
     // GUI Components
     private final JTextField[] gprTextFields = new JTextField[4];
@@ -49,6 +50,9 @@ public class SimulatorGUI extends JFrame {
         setLocationRelativeTo(null);
         cpu.resetMachine(); // Perform initial reset on startup
         updateAllDisplays();
+    // NOTE: automatic IPL/run on startup was removed to require explicit
+    // user action (click IPL and select the load file). This prevents the
+    // program from auto-executing without user intent.
     }
 
     private void setupComponents() {
@@ -382,8 +386,22 @@ public class SimulatorGUI extends JFrame {
      * @param text The log message.
      */
     public void appendToPrinter(String text) {
-        printerArea.append(text + "\n");
-        printerArea.setCaretPosition(printerArea.getDocument().getLength());
+        // Ensure Swing updates happen on the Event Dispatch Thread
+        SwingUtilities.invokeLater(() -> {
+            // Ensure simulator log lines appear on a new line, even if the last
+            // printed OUT character did not include a newline.
+            try {
+                int len = printerArea.getDocument().getLength();
+                if (len > 0) {
+                    String last = printerArea.getText(len - 1, 1);
+                    if (!"\n".equals(last)) {
+                        printerArea.append("\n");
+                    }
+                }
+            } catch (Exception ignored) { /* safe to ignore */ }
+            printerArea.append(text + "\n");
+            printerArea.setCaretPosition(printerArea.getDocument().getLength());
+        });
     }
     
     /**
@@ -392,15 +410,60 @@ public class SimulatorGUI extends JFrame {
      * @param text The character or string to print.
      */
     public void printToConsole(String text) {
-        printerArea.append(text);
-        printerArea.setCaretPosition(printerArea.getDocument().getLength());
+        // OUT instruction may be invoked from a background thread.
+        // Update the Swing component on the EDT and make non-printable
+        // characters visible by rendering them as octal in angle brackets.
+        SwingUtilities.invokeLater(() -> {
+            // Record raw console output for headless testing
+            consoleOut.append(text);
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < text.length(); i++) {
+                char c = text.charAt(i);
+                if (c >= 32 && c <= 126) {
+                    sb.append(c);
+                } else if (c == '\n' || c == '\r' || c == '\t') {
+                    sb.append(c);
+                } else {
+                    sb.append(String.format("<%03o>", (int) c));
+                }
+            }
+            // Append to the visible printer area without forcing a newline; this
+            // keeps multi-digit or negative numbers on a single line. Simulator
+            // log lines (via appendToPrinter) will insert a newline first if needed.
+            printerArea.append(sb.toString());
+            printerArea.setCaretPosition(printerArea.getDocument().getLength());
+        });
     }
 
     /**
      * === NEW: Clears the printer area. ===
      */
     public void clearPrinter() {
-        printerArea.setText("");
+        SwingUtilities.invokeLater(() -> printerArea.setText(""));
+        consoleOut.setLength(0);
+    }
+
+    // === Added: Test harness helpers ===
+    /**
+     * Expose the CPU instance for headless testing.
+     */
+    public CPU getCpu() {
+        return this.cpu;
+    }
+
+    /**
+     * Get the current content of the printer area as plain text.
+     * Note: This returns the Swing text content, which may update asynchronously.
+     */
+    public String getPrinterText() {
+        return printerArea.getText();
+    }
+
+    /**
+     * Get only the characters printed by OUT (raw, no extra logs).
+     */
+    public String getConsoleOut() {
+        return consoleOut.toString();
     }
 
     private void addListeners() {
@@ -417,8 +480,10 @@ public class SimulatorGUI extends JFrame {
         consoleInputTextField.addActionListener(e -> {
             String text = consoleInputTextField.getText();
             if (!text.isEmpty()) {
-                // Send the input text to the CPU
-                cpu.submitConsoleInput(text);
+                // Send the input text to the CPU, appending a trailing space so
+                // the unified parser can finalize the last number without the
+                // user having to type an extra delimiter.
+                cpu.submitConsoleInput(text + " ");
                 // Clear the input field
                 consoleInputTextField.setText("");
             }
@@ -531,6 +596,11 @@ public class SimulatorGUI extends JFrame {
         cacheContentArea.setText(cpu.getFormattedCache());
         cacheContentArea.setCaretPosition(0); // Scroll to top
     }
+
+    // NOTE: the auto-load-and-run feature was intentionally removed. If you
+    // want batch testing or auto-run behavior in the future, we can re-add a
+    // small, explicit toggle or an "Auto IPL" configuration file. For now the
+    // user must click IPL and select a load file to IPL the simulator.
     // ===========================================
 
     public void showError(String title, String message) {

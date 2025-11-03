@@ -11,6 +11,8 @@ public class CPU {
     private final Utils utils = new Utils();
     private SwingWorker<Void, Void> runWorker;
     private boolean isHalted = true;
+    // Toggle for verbose debug logging
+    private static final boolean DEBUG = false;
 
     // Registers
     private short[] gpr = new short[4];
@@ -23,12 +25,14 @@ public class CPU {
     // === NEW: Cache and I/O Components ===
     private final Cache cache;
     private String kbdBuffer = "";
-    private boolean isWaitingForInput = false;
+    private volatile boolean isWaitingForInput = false;
+    // Tracks whether the CPU was running when it entered a keyboard wait so we can auto-resume
+    private boolean wasRunningBeforeWait = false;
     // ===================================
 
     // Fault Codes
     private static final short FAULT_ILLEGAL_MEM_ADDR = 1; // 0001
-    private static final short FAULT_RESERVED_LOCATION = 2; // 0010
+    // private static final short FAULT_RESERVED_LOCATION = 2; // 0010 (unused)
     private static final short FAULT_ILLEGAL_OPCODE = 4; // 0100
     private static final short FAULT_ILLEGAL_OPERATION = 8; // 1000
     
@@ -43,21 +47,21 @@ public class CPU {
     }
 
     public void ipl(File programFile) {
-        System.out.println("\n=== Initializing Machine (IPL) ===");
+        if (DEBUG) System.out.println("\n=== Initializing Machine (IPL) ===");
         resetMachine();
         if (programFile != null) {
             loadProgram(programFile);
         } else {
-            System.out.println("No program file selected for IPL.");
+            if (DEBUG) System.out.println("No program file selected for IPL.");
         }
-        System.out.println("\nMachine ready. PC may be set to start address if a program was loaded.");
-        printRegisterState();
+        if (DEBUG) System.out.println("\nMachine ready. PC may be set to start address if a program was loaded.");
+        if (DEBUG) printRegisterState();
         gui.updateAllDisplays();
     }
     
     public void resetMachine() {
         halt();
-        System.out.println("Clearing all registers and memory...");
+        if (DEBUG) System.out.println("Clearing all registers and memory...");
         // Clear memory and registers
         for (int i = 0; i < memory.length; i++) memory[i] = 0;
         for (int i = 0; i < 4; i++) gpr[i] = 0;
@@ -77,7 +81,7 @@ public class CPU {
     public void loadProgram(File programFile) {
         short firstAddress = -1;
         try (BufferedReader reader = new BufferedReader(new FileReader(programFile))) {
-            System.out.println("\nLoading program from " + programFile.getName());
+            if (DEBUG) System.out.println("\nLoading program from " + programFile.getName());
             String line;
             
             while ((line = reader.readLine()) != null) {
@@ -93,7 +97,7 @@ public class CPU {
                         if (address >= 0 && address < memory.length) {
                             // Load directly into main memory, bypassing cache
                             memory[address] = value; 
-                            System.out.printf("Loaded memory[%04o] with value %06o\n", address, value);
+                            if (DEBUG) System.out.printf("Loaded memory[%04o] with value %06o\n", address, value);
                             if (firstAddress == -1) {
                                 firstAddress = (short) address;
                             }
@@ -102,7 +106,7 @@ public class CPU {
                         }
                     }
                 } catch (NumberFormatException e) {
-                    System.out.println("Warning: Skipping invalid line in program file: " + line);
+                    if (DEBUG) System.out.println("Warning: Skipping invalid line in program file: " + line);
                 }
             }
             
@@ -113,12 +117,12 @@ public class CPU {
             if (firstAddress != -1) {
                 pc = firstAddress; // Set PC to the address of the very first instruction loaded
                 isHalted = false;
-                System.out.printf("\nProgram loaded. PC set to the first address: %04o\n", pc);
+                if (DEBUG) System.out.printf("\nProgram loaded. PC set to the first address: %04o\n", pc);
             } else {
-                System.out.println("Program file was empty or contained no valid data. PC remains 0.");
+                if (DEBUG) System.out.println("Program file was empty or contained no valid data. PC remains 0.");
             }
             
-            System.out.println("Program loading complete.");
+            if (DEBUG) System.out.println("Program loading complete.");
             gui.updateAllDisplays();
         } catch (IOException e) {
             System.err.println("Error loading program: " + e.getMessage());
@@ -128,6 +132,7 @@ public class CPU {
     }
     
     private void printRegisterState() {
+        if (!DEBUG) return;
         System.out.println("\n=== Current Register State ===");
         System.out.printf("PC:  %04o    MAR: %04o    MBR: %06o\n", pc, mar, mbr);
         System.out.printf("IR:  %06o    CC:  %s (bin)    MFR: %s (bin)\n", ir, utils.shortToBinary(cc, 4), utils.shortToBinary(mfr, 4));
@@ -151,8 +156,8 @@ public class CPU {
                                     pc, mar, mbr, ir,
                                     gpr[0], gpr[1], gpr[2], gpr[3],
                                     ixr[1], ixr[2], ixr[3]);
-        // gui.appendToPrinter(status); // This is too noisy, let's keep it in the console
-        System.out.println(status);
+    // gui.appendToPrinter(status); // Too noisy for normal runs
+    if (DEBUG) System.out.println(status);
         gui.updateAllDisplays();
     }
 
@@ -265,14 +270,15 @@ public class CPU {
         int r      = (ir >>> 8)  & 0x3;  // Bits 9-8  (2 bits)
         int address = ir & 0xFF;         // Bits 7-0  (8 bits)
 
-        // These fields are no longer used in this design
-        int ix     = 0;
-        int i      = 0;
+    // These fields are no longer used in this design
+    int ix     = 0;
 
-        // Log instruction details
-        gui.appendToPrinter("=== Instruction Execution ===");
-        gui.appendToPrinter(String.format("Location: %06o  Instruction: %06o", mar, ir));
-        gui.appendToPrinter("Decoded fields (octal):");
+        // Log instruction details (debug only)
+        if (DEBUG) {
+            gui.appendToPrinter("=== Instruction Execution ===");
+            gui.appendToPrinter(String.format("Location: %06o  Instruction: %06o", mar, ir));
+            gui.appendToPrinter("Decoded fields (octal):");
+        }
 
         // 4. Execute based on opcode
         // Effective Address Calculation (only for relevant instructions)
@@ -294,7 +300,7 @@ public class CPU {
             case 15: // JGE
             case 33: // LDX
             case 34: // STX
-                gui.appendToPrinter(String.format("  Opcode: %02o, R: %o, Addr: %03o", opcode, r, address));
+                if (DEBUG) gui.appendToPrinter(String.format("  Opcode: %02o, R: %o, Addr: %03o", opcode, r, address));
                 break;
         }
 
@@ -302,6 +308,16 @@ public class CPU {
         switch(opcode) {
             case 0: // HLT
                 gui.appendToPrinter("HLT - Halting machine");
+                // Dump a small set of registers to the printer and system console (debug only)
+                if (DEBUG) {
+                    gui.appendToPrinter("=== HLT REGISTER DUMP ===");
+                    gui.appendToPrinter(String.format("GPR0: %06o GPR1: %06o GPR2: %06o GPR3: %06o", gpr[0], gpr[1], gpr[2], gpr[3]));
+                    gui.appendToPrinter(String.format("IXR1: %06o IXR2: %06o IXR3: %06o PC: %06o", ixr[1], ixr[2], ixr[3], pc));
+                    System.out.println(String.format("HLT DUMP GPRs: %06o %06o %06o %06o", gpr[0], gpr[1], gpr[2], gpr[3]));
+                }
+                // Keep PC pointing at the HLT instruction so pressing Run again
+                // won't step into the data segment after the program ends.
+                pc--; // pc was pre-incremented after fetch
                 halt();
                 break;
                 
@@ -309,6 +325,19 @@ public class CPU {
                 if (!checkMemoryFault((short)effectiveAddr)) {
                     // === MODIFIED: Use Cache ===
                     gpr[r] = cache.read((short)effectiveAddr);
+                    // Debug: report loads from data area (129..146)
+                    if (DEBUG) {
+                        // Log loads from our data regions (old: 129..146, new: 239..251)
+                        if ((effectiveAddr >= 129 && effectiveAddr <= 146) || (effectiveAddr >= 239 && effectiveAddr <= 251)) {
+                            short memVal = cache.read((short)effectiveAddr);
+                            int byteVal = memVal & 0xFF;
+                            char ch = (char) byteVal;
+                            String dbg = String.format("DEBUG LDR: mem[%03o] -> R%o = %06o  dec:%d  char:'%s'", effectiveAddr, r, memVal, byteVal, (Character.isISOControl(ch) ? "?" : String.valueOf(ch)));
+                            gui.appendToPrinter(dbg);
+                            // Also echo to System.out so terminal runs capture the debug
+                            System.out.println(dbg);
+                        }
+                    }
                     // ===========================
                 }
                 break;
@@ -318,6 +347,21 @@ public class CPU {
                     // === MODIFIED: Use Cache ===
                     mbr = gpr[r]; // MBR gets value to be stored
                     cache.write((short)effectiveAddr, mbr);
+                    // Debug: if program updates target/best-diff/best-value locations (0201/0202/0203), print a diagnostic
+                    // Octal 0201 = decimal 129, 0202 = 130, 0203 = 131
+                    // Debug: if program updates candidate/data locations (addresses in data area) print a diagnostic
+                    if (DEBUG) {
+                        // Log stores to our data regions (old: 129..146, new: 239..251)
+                        if ((effectiveAddr >= 129 && effectiveAddr <= 146) || (effectiveAddr >= 239 && effectiveAddr <= 251)) {
+                            short memVal = cache.read((short)effectiveAddr);
+                            int byteVal = memVal & 0xFF;
+                            char ch = (char) byteVal;
+                            String dbg = String.format("DEBUG STR: mem[%03o] <= %06o  dec:%d  char:'%s'", effectiveAddr, memVal, byteVal, (Character.isISOControl(ch) ? "?" : String.valueOf(ch)));
+                            gui.appendToPrinter(dbg);
+                            // Also echo to System.out so terminal runs capture the debug
+                            System.out.println(dbg);
+                        }
+                    }
                     // ===========================
                 }
                 break;
@@ -346,22 +390,28 @@ public class CPU {
 
             case 6: // AIR - Add Immediate to Register
                 // For AIR/SIR, 'address' field (5 bits) is the immediate value
-                gui.appendToPrinter(String.format("  R: %o, Immed: %o", r, address));
+                if (DEBUG) gui.appendToPrinter(String.format("  R: %o, Immed: %o", r, address));
                 gpr[r] += address;
                 break;
 
             case 7: // SIR - Subtract Immediate from Register
                 // For AIR/SIR, 'address' field (5 bits) is the immediate value
-                gui.appendToPrinter(String.format("  R: %o, Immed: %o", r, address));
+                if (DEBUG) gui.appendToPrinter(String.format("  R: %o, Immed: %o", r, address));
                 gpr[r] -= address;
                 break;
 
             case 8: // JZ - Jump if Zero
-                if (gpr[r] == 0) pc = (short)effectiveAddr;
+                if (gpr[r] == 0) {
+                    if (DEBUG) System.out.println(String.format("BRANCH JZ taken @ PC=%06o -> %06o (R%o==0)", pc, effectiveAddr, r));
+                    pc = (short)effectiveAddr;
+                }
                 break;
 
             case 9: // JNE - Jump if Not Equal (to zero)
-                if (gpr[r] != 0) pc = (short)effectiveAddr;
+                if (gpr[r] != 0) {
+                    if (DEBUG) System.out.println(String.format("BRANCH JNE taken @ PC=%06o -> %06o (R%o!=0)", pc, effectiveAddr, r));
+                    pc = (short)effectiveAddr;
+                }
                 break;
 
             case 10: // JCC - Jump if Condition Code
@@ -391,7 +441,10 @@ public class CPU {
                 break;
 
             case 15: // JGE - Jump Greater Than or Equal
-                if (gpr[r] >= 0) pc = (short)effectiveAddr;
+                if (gpr[r] >= 0) {
+                    if (DEBUG) System.out.println(String.format("BRANCH JGE taken @ PC=%06o -> %06o (R%o>=0)", pc, effectiveAddr, r));
+                    pc = (short)effectiveAddr;
+                }
                 break;
             
             // ISA Opcode for LDX is 41 octal = 33 decimal
@@ -419,30 +472,76 @@ public class CPU {
                 }
                 break;
                 
-            case 28: // MLT - Multiply Register by Register
-                // implementation removed for brevity
+            case 56: // MLT - Multiply Register by Register (opcode octal 70)
+                // Format: Op(6), Rx(2), Ry(2) in bits. Multiply Rx *= Ry (lower 16 bits stored)
+                {
+                    int rx = (ir >>> 8) & 0x3;
+                    int ry = (ir >>> 6) & 0x3;
+                    int result = (gpr[rx] & 0xFFFF) * (gpr[ry] & 0xFFFF);
+                    gpr[rx] = (short) result; // keep low 16 bits
+                    if (DEBUG) gui.appendToPrinter(String.format("MLT: R%o = R%o * R%o => %06o", rx, rx, ry, gpr[rx]));
+                }
                 break;
 
-            case 29: // DVD - Divide Register by Register
-                // implementation removed for brevity
+            case 57: // DVD - Divide Register by Register (opcode octal 71)
+                // Rx = Rx / Ry ; Ry = Rx % Ry (quotient in Rx, remainder in Ry)
+                {
+                    int rx = (ir >>> 8) & 0x3;
+                    int ry = (ir >>> 6) & 0x3;
+                    int dividend = gpr[rx];
+                    int divisor = gpr[ry];
+                    if (divisor == 0) {
+                        mfr = FAULT_ILLEGAL_OPERATION;
+                        gui.appendToPrinter("ERROR: Division by zero");
+                        halt();
+                        return;
+                    }
+                    int quot = dividend / divisor;
+                    int rem = dividend % divisor;
+                    gpr[rx] = (short) quot;
+                    gpr[ry] = (short) rem;
+                    if (DEBUG) gui.appendToPrinter(String.format("DVD: R%o = %06o, R%o = %06o (rem)", rx, gpr[rx], ry, gpr[ry]));
+                }
                 break;
 
-            case 30: // TRR - Test the Equality of Register and Register
-                // implementation removed for brevity
+            case 58: // TRR - Test the Relation of Register and Register (opcode octal 72)
+                // Set condition codes: bit0 = equal, bit1 = less-than, bit2 = greater-than
+                {
+                    int rx = (ir >>> 8) & 0x3;
+                    int ry = (ir >>> 6) & 0x3;
+                    int lhs = gpr[rx];
+                    int rhs = gpr[ry];
+                    // Clear low 3 bits
+                    cc &= ~0x7;
+                    if (lhs == rhs) cc |= 0x1; // equal
+                    else if (lhs < rhs) cc |= 0x2; // less-than
+                    else cc |= 0x4; // greater-than
+                    if (DEBUG) gui.appendToPrinter(String.format("TRR: compare R%o(%06o) vs R%o(%06o) => CC=%s", rx, lhs, ry, rhs, utils.shortToBinary(cc, 4)));
+                }
                 break;
 
-            case 31: // AND - Logical AND of Register and Register
-                // implementation removed for brevity
+            case 59: // AND - Logical AND of Register and Register (opcode octal 73)
+                {
+                    int rx = (ir >>> 8) & 0x3;
+                    int ry = (ir >>> 6) & 0x3;
+                    gpr[rx] = (short) (gpr[rx] & gpr[ry]);
+                    if (DEBUG) gui.appendToPrinter(String.format("AND: R%o &= R%o => %06o", rx, ry, gpr[rx]));
+                }
                 break;
 
-            case 32: // ORR - Logical OR of Register and Register
-                // implementation removed for brevity
+            case 60: // ORR - Logical OR of Register and Register (opcode octal 74)
+                {
+                    int rx = (ir >>> 8) & 0x3;
+                    int ry = (ir >>> 6) & 0x3;
+                    gpr[rx] = (short) (gpr[rx] | gpr[ry]);
+                    if (DEBUG) gui.appendToPrinter(String.format("ORR: R%o |= R%o => %06o", rx, ry, gpr[rx]));
+                }
                 break;
 
             // ISA Opcode for NOT is 75 octal = 61 decimal
             case 61: // NOT
                 // Format: Op(6), R(2), ...
-                gui.appendToPrinter(String.format("  R: %o", r));
+                if (DEBUG) gui.appendToPrinter(String.format("  R: %o", r));
                 gpr[r] = (short)(~gpr[r]); // Perform bitwise NOT
                 break;
             case 25: // SRC - Shift Register by Count
@@ -458,7 +557,7 @@ public class CPU {
                 boolean left = (lr == 1);
                 boolean logical = (al == 1);
                 
-                gui.appendToPrinter(String.format("  R: %o, A/L: %o, L/R: %o, Count: %d", r, al, lr, count));
+                if (DEBUG) gui.appendToPrinter(String.format("  R: %o, A/L: %o, L/R: %o, Count: %d", r, al, lr, count));
                 
                 if (left) {
                     if (logical) {
@@ -483,7 +582,7 @@ public class CPU {
                 left = (lr == 1);
                 short val = gpr[r];
 
-                gui.appendToPrinter(String.format("  R: %o, L/R: %o, Count: %d", r, lr, count));
+                if (DEBUG) gui.appendToPrinter(String.format("  R: %o, L/R: %o, Count: %d", r, lr, count));
                 
                 if (count > 0) {
                     count %= 16; // Handle excessive rotates
@@ -506,14 +605,16 @@ public class CPU {
                 // Format: Op(6), R(2), DevID(8)
                 // DevID is in the lower 8 bits (per Assembler.java)
                 int devId = ir & 0xFF; 
-                gui.appendToPrinter(String.format("  R: %o, DevID: %d", r, devId));
+                if (DEBUG) gui.appendToPrinter(String.format("  R: %o, DevID: %d", r, devId));
 
                 if (devId == 0) { // Console Keyboard
                     if (kbdBuffer.isEmpty()) {
                         // Wait for input
+                        // Record whether we were running so we can auto-resume when input arrives
+                        wasRunningBeforeWait = (runWorker != null && !runWorker.isDone());
                         isWaitingForInput = true;
                         pc--; // Re-execute this instruction
-                        gui.appendToPrinter("Program is waiting for input from Console Keyboard...");
+                        gui.appendToPrinter(String.format("Program is waiting for input from Console Keyboard... (PC=%06o)", pc));
                         gui.updateAllDisplays();
                         return; // Stop execution cycle
                     } else {
@@ -534,12 +635,41 @@ public class CPU {
             case 50: // OUT - Output to Device
             {
                 int devId = ir & 0xFF;
-                gui.appendToPrinter(String.format("  R: %o, DevID: %d", r, devId));
-                
+                if (DEBUG) {
+                    System.out.println(String.format("EXECUTE OUT @ PC=%06o  IR=%06o  R=%o  DevID=%d", pc, ir, r, devId));
+                    gui.appendToPrinter(String.format("  R: %o, DevID: %d", r, devId));
+                }
+
                 if (devId == 1) { // Console Printer
                     // Output the lower 8 bits of the register as a character
-                    char c = (char) (gpr[r] & 0xFF);
+                    // Per spec and our assembly conventions, OUT must use R3.
+                    // Enforce using R3 regardless of provided R field to be robust.
+                    if (r != 3) {
+                        gui.appendToPrinter(String.format("[WARN] OUT expected R3, but got R%o — using R3 anyway", r));
+                    }
+                    int value = gpr[3] & 0xFF;
+                    char c = (char) value;
+
+                    // Print the character to the printer area
                     gui.printToConsole(String.valueOf(c)); // Use new method
+                    // Optional verbose OUT log for debugging (disabled by default)
+                    if (DEBUG) {
+                        gui.appendToPrinter("[OUT] " + (Character.isISOControl(c) ? String.format("<%03o>", value) : String.valueOf(c)));
+                    }
+                    if (DEBUG) {
+                        int numericValue = -1;
+                        if (Character.isDigit(c)) {
+                            numericValue = value - '0';
+                        }
+                        String printable = Character.isISOControl(c) ? "?" : String.valueOf(c);
+                        if (numericValue >= 0) {
+                            gui.appendToPrinter(String.format("    OUT -> char: '%s'  dec(ascii): %d  num: %d  oct: %03o", printable, value, numericValue, value));
+                            System.out.println(String.format("OUT -> char: '%s'  dec(ascii): %d  num: %d  oct: %03o", printable, value, numericValue, value));
+                        } else {
+                            gui.appendToPrinter(String.format("    OUT -> char: '%s'  dec: %d  oct: %03o", printable, value, value));
+                            System.out.println(String.format("OUT -> char: '%s'  dec: %d  oct: %03o", printable, value, value));
+                        }
+                    }
                 } else {
                     gui.appendToPrinter("Warning: OUT to unimplemented device " + devId);
                 }
@@ -550,12 +680,16 @@ public class CPU {
             case 51: // CHK - Check Device Status
             {
                 int devId = ir & 0xFF;
-                gui.appendToPrinter(String.format("  R: %o, DevID: %d", r, devId));
+                if (DEBUG) gui.appendToPrinter(String.format("  R: %o, DevID: %d", r, devId));
 
                 gpr[r] = 0; // Default status = 0
                 if (devId == 0) { // Console Keyboard
                     // Set GPR[r] to 1 if input is available, 0 otherwise
                     gpr[r] = kbdBuffer.isEmpty() ? (short)0 : (short)1;
+                    if (DEBUG) {
+                        System.out.println("CHK -> kbdBuffer.length=" + kbdBuffer.length() + ", setting GPR" + r + "=" + gpr[r]);
+                        gui.appendToPrinter("DEBUG CHK: kbdBuffer.length=" + kbdBuffer.length() + ", GPR" + r + "=" + gpr[r]);
+                    }
                 } else if (devId == 1) { // Console Printer
                     // Set GPR[r] to 1 (always ready)
                     gpr[r] = 1;
@@ -567,9 +701,18 @@ public class CPU {
             // =======================================
 
             default:
+                // Gracefully handle unknown/illegal opcodes. This commonly happens when
+                // execution falls through into the data segment after program end.
                 mfr = FAULT_ILLEGAL_OPCODE;
+                // Back up PC so repeated Run/Step won't keep advancing into data
+                pc--; // pc was pre-incremented after fetch
+                String msg = String.format("Unimplemented or Illegal Instruction - Opcode: %02o at PC=%06o IR=%06o", opcode, pc, ir);
+                gui.appendToPrinter("ERROR: " + msg + " — Halting.");
+                System.err.println(msg);
                 halt();
-                throw new Exception(String.format("Unimplemented or Illegal Instruction - Opcode: %02o", opcode));
+                // Return early to avoid post-exec UI spam
+                updateDisplayAndLog();
+                return;
         }
         
         // Update GUI and logs *after* successful execution
@@ -597,7 +740,7 @@ public class CPU {
                         }
 
                         try {
-                            Thread.sleep(10); // Reduced sleep time for faster execution
+                            Thread.sleep(1); // Faster execution for headless tests
                             // SwingUtilities.invokeLater(() -> gui.updateAllDisplays()); // Too slow, update at end
                         } catch (InterruptedException e) {
                             Thread.currentThread().interrupt();
@@ -609,11 +752,13 @@ public class CPU {
                 
                 @Override
                 protected void done() {
-                    if (isHalted) {
-                        System.out.println("Program execution completed or halted.");
-                    }
-                    if (isWaitingForInput) {
-                         System.out.println("Program execution paused for input.");
+                    if (DEBUG) {
+                        if (isHalted) {
+                            System.out.println("Program execution completed or halted.");
+                        }
+                        if (isWaitingForInput) {
+                             System.out.println("Program execution paused for input.");
+                        }
                     }
                     // Final update
                     SwingUtilities.invokeLater(() -> gui.updateAllDisplays());
@@ -625,13 +770,34 @@ public class CPU {
     
     // === NEW: Public method for GUI to submit input ===
     public void submitConsoleInput(String text) {
-        this.kbdBuffer += text + "\n"; // Add newline as programs expect it
+        // Do not append an automatic newline. Treat Enter as a submit action, not as input.
+        // Programs that need an explicit newline can include it in their input string.
+        this.kbdBuffer += text;
+    if (DEBUG) System.out.println("submitConsoleInput() called with: '" + text + "'  (kbdBuffer now length=" + kbdBuffer.length() + ")");
+        gui.appendToPrinter("-> Input '" + text + "' received.");
         if (isWaitingForInput) {
+            // Clear wait state and conditionally resume if the program was previously running
             isWaitingForInput = false;
-            gui.appendToPrinter("-> Input '" + text + "' received. Press Run or Step to continue.");
+            if (wasRunningBeforeWait) {
+                wasRunningBeforeWait = false;
+                gui.appendToPrinter("Resuming program execution.");
+                // Start/resume the run worker
+                runProgram();
+            } else {
+                gui.appendToPrinter("Press Run or Step to continue.");
+            }
         }
     }
     // ================================================
+
+    /**
+     * Public getter so the GUI / test harness can detect when the CPU
+     * is waiting for keyboard input. This is used by the auto-loader
+     * to feed tokens one-by-one while the program runs.
+     */
+    public synchronized boolean isWaitingForInput() {
+        return isWaitingForInput;
+    }
 
     public void singleStep() {
         if (isHalted) {
@@ -659,7 +825,7 @@ public class CPU {
         if (runWorker!= null &&!runWorker.isDone()) {
             runWorker.cancel(true);
         }
-        System.out.println("Execution halted.");
+        if (DEBUG) System.out.println("Execution halted.");
     }
 
     private boolean checkMemoryFault(int address) {
@@ -718,6 +884,12 @@ public class CPU {
     public short getCC() { return cc; }
     public short getMFR() { return mfr; }
     public Utils getUtils() { return utils; }
+    
+    // Tiny helper: peek memory (via cache) at an absolute address for debugging/tests
+    public short peekMemory(short address) {
+        if (address < 0 || address >= memory.length) return 0;
+        return cache.read(address);
+    }
     
     // Setters
     public void setGPR(int i, short value) { gpr[i] = value; }
