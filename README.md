@@ -1,3 +1,8 @@
+## Documentation
+
+- Project PDF: [CSCI 6461 Machine Simulator Documentation Project 2 - Team 12](./CSCI%206461%20Machine%20Simulator%20Documentation%20Project%202-%20Team%2012.pdf)
+- Design notes: [CSCI 6461 Design Notes](./CSCI 6461 Design Notes.md)
+
 ## How to run the GUI
 
 Use these steps on Windows PowerShell to build and launch the GUI:
@@ -30,8 +35,6 @@ javac -d ..\bin *.java
 cd ..\bin
 java Main
 ```
-
-
 ---
 
 ## Test Cases
@@ -47,3 +50,4 @@ Examples you can paste into the GUI Console Input (expected output in parenthese
 - -30000 -32767 -5 -4 -3 -2 -1 0 1 2 3 4 5 6 7 8 9 10 11 12 13 (-32767)
 
 ---
+
