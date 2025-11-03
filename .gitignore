@@ -1,5 +1,3 @@
 .DS_Store
 src/**/*.class
 out/
-listing_output.txt
-load_file.txt
