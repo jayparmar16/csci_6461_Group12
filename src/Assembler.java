@@ -2,7 +2,7 @@ import java.io.*;
 import java.util.*;
 
 /**
- * A self-contained, two-pass assembler for the C6461 computer architecture.
+ * two-pass assembler for the C6461 computer architecture.
  * This class is used to convert assembly source files into machine-loadable code.
  */
 public class Assembler {
@@ -38,60 +38,82 @@ public class Assembler {
     }
 
     private void firstPass() {
-        int locationCounter = 0;
+        // Start assembling at address 000006 by default to preserve reserved locations 0-5
+        int locationCounter = 6;
         for (String line : sourceLines) {
-            String cleanLine = line.split(";")[0].trim();
-            if (cleanLine.isEmpty()) continue;
-            List<String> tokens = new ArrayList<>(Arrays.asList(cleanLine.split("\\s+")));
-            
-            String label = null;
-            if (tokens.get(0).endsWith(":")) {
-                label = tokens.get(0).substring(0, tokens.get(0).length() - 1);
-                tokens.remove(0);
-            }
-            if (label!= null) symbolTable.put(label, locationCounter);
-            if (tokens.isEmpty()) continue;
+            try {
+                String cleanLine = line.split(";")[0].trim();
+                if (cleanLine.isEmpty()) continue;
+                List<String> tokens = new ArrayList<>(Arrays.asList(cleanLine.split("\\s+")));
+                tokens.removeIf(String::isEmpty);
+                if (tokens.isEmpty()) continue; // robust: skip whitespace-only or odd unicode whitespace lines
+                
+                String label = null;
+                if (tokens.get(0).endsWith(":")) {
+                    label = tokens.get(0).substring(0, tokens.get(0).length() - 1);
+                    tokens.remove(0);
+                }
+                if (label!= null) symbolTable.put(label, locationCounter);
+                if (tokens.isEmpty()) continue;
 
-            String instruction = tokens.get(0).toUpperCase();
-            if ("LOC".equals(instruction)) {
-                locationCounter = Integer.parseInt(tokens.get(1));
-            } else {
-                locationCounter++;
+                String instruction = tokens.get(0).toUpperCase();
+                if ("LOC".equals(instruction)) {
+                    if (tokens.size() >= 2) {
+                        locationCounter = Integer.parseInt(tokens.get(1));
+                    }
+                } else {
+                    locationCounter++;
+                }
+            } catch (Exception ex) {
+                // Skip malformed line quietly in pass 1
+                // System.err.println("WARN firstPass skipping line: " + line);
+                continue;
             }
         }
     }
 
     private void secondPass() {
-        int locationCounter = 0;
+        // Start assembling at address 000006 by default to preserve reserved locations 0-5
+        int locationCounter = 6;
         for (String originalLine : sourceLines) {
-            String cleanLine = originalLine.split(";")[0].trim();
-            if (cleanLine.isEmpty()) {
-                listingFileLines.add(originalLine);
-                continue;
-            }
-            List<String> tokens = new ArrayList<>(Arrays.asList(cleanLine.split("\\s+")));
-            if (tokens.get(0).endsWith(":")) tokens.remove(0);
-            if (tokens.isEmpty()) {
-                listingFileLines.add(String.format("              %s", originalLine));
-                continue;
-            }
-            String instruction = tokens.get(0).toUpperCase();
-            String operands = tokens.size() > 1? String.join(",", tokens.subList(1, tokens.size())) : "";
+            try {
+                String cleanLine = originalLine.split(";")[0].trim();
+                if (cleanLine.isEmpty()) {
+                    listingFileLines.add(originalLine);
+                    continue;
+                }
+                List<String> tokens = new ArrayList<>(Arrays.asList(cleanLine.split("\\s+")));
+                tokens.removeIf(String::isEmpty);
+                if (tokens.isEmpty()) { listingFileLines.add(String.format("              %s", originalLine)); continue; }
+                if (tokens.get(0).endsWith(":")) tokens.remove(0);
+                if (tokens.isEmpty()) {
+                    listingFileLines.add(String.format("              %s", originalLine));
+                    continue;
+                }
+                String instruction = tokens.get(0).toUpperCase();
+                String operands = tokens.size() > 1? String.join(",", tokens.subList(1, tokens.size())) : "";
 
-            if ("LOC".equals(instruction)) {
-                locationCounter = Integer.parseInt(operands);
+                if ("LOC".equals(instruction)) {
+                    String ops = operands.trim();
+                    if (!ops.isEmpty()) {
+                        locationCounter = Integer.parseInt(ops.split(",")[0]);
+                    }
+                    listingFileLines.add(String.format("              %s", originalLine));
+                    continue;
+                }
+                int currentAddress = locationCounter;
+                String machineCode = translate(instruction, operands);
+                if (machineCode!= null) {
+                    loadFileMap.put(currentAddress, machineCode);
+                    listingFileLines.add(String.format("%06o %s %s", currentAddress, machineCode, originalLine));
+                } else {
+                    listingFileLines.add(String.format("%06o?????? %s ; ERROR: Invalid", currentAddress, originalLine));
+                }
+                locationCounter++;
+            } catch (Exception ex) {
                 listingFileLines.add(String.format("              %s", originalLine));
                 continue;
             }
-            int currentAddress = locationCounter;
-            String machineCode = translate(instruction, operands);
-            if (machineCode!= null) {
-                loadFileMap.put(currentAddress, machineCode);
-                listingFileLines.add(String.format("%06o %s %s", currentAddress, machineCode, originalLine));
-            } else {
-                listingFileLines.add(String.format("%06o?????? %s ; ERROR: Invalid", currentAddress, originalLine));
-            }
-            locationCounter++;
         }
     }
 
@@ -103,22 +125,44 @@ public class Assembler {
         try {
             int machineCode;
             switch (instruction) {
-                case "LDR", "STR", "LDA", "AMR", "SMR", "JZ", "JNE", "JCC", "SOB", "JGE" -> {
-                    int r = parseValue(params[0]);
-                    int ix = parseValue(params[1]);
-                    int address = parseValue(params[2]);
-                    int i = (params.length == 4)? 1 : 0;
-                    machineCode = (opcode << 10) | (r << 8) | (ix << 6) | (i << 5) | address;
+                case "LDR", "STR", "LDA", "AMR", "SMR", "JZ", "JNE", "JCC", "SOB", "JGE", "JMA", "JSR" -> {
+                        // Parse operands robustly: expect (R, [IX,] ADDRESS) but support shorter forms.
+                        int r = 0;
+                        int address = 0;
+                        if (params.length == 1) {
+                            // Form: ADDRESS (r defaults to 0)
+                            address = parseValue(params[0]);
+                        } else if (params.length >= 2) {
+                            // Form: R, ADDRESS (ignore IX for these instructions)
+                            r = parseValue(params[0]);
+                            address = parseValue(params[1]);
+                        }
+                        // Range check: this instruction encodes an 8-bit address field
+                        if ((address & ~0xFF) != 0) {
+                            System.err.println(String.format("Assembly ERROR: address out of range for %s -> %d (must fit 8 bits).", instruction, address));
+                            return null;
+                        }
+                        machineCode = (opcode << 10) | (r << 8) | (address & 0xFF);
                 }
-                case "LDX", "STX", "JMA", "JSR" -> {
+                case "LDX", "STX" -> {
                     int ix = parseValue(params[0]);
                     int address = parseValue(params[1]);
                     int i = (params.length == 3)? 1 : 0;
-                    machineCode = (opcode << 10) | (ix << 6) | (i << 5) | address;
+                    // Range check: these forms encode a 5-bit address field
+                    if ((address & ~0x1F) != 0) {
+                        System.err.println(String.format("Assembly ERROR: address out of range for %s -> %d (must fit 5 bits).", instruction, address));
+                        return null;
+                    }
+                    machineCode = (opcode << 10) | (ix << 6) | (i << 5) | (address & 0x1F);
                 }
                 case "AIR", "SIR" -> {
                     int r = parseValue(params[0]);
                     int immed = parseValue(params[1]);
+                    // Range check: AIR/SIR use a small immediate (5 bits) in our encoding
+                    if ((immed & ~0x1F) != 0) {
+                        System.err.println(String.format("Assembly ERROR: immediate out of range for %s -> %d (must fit 5 bits).", instruction, immed));
+                        return null;
+                    }
                     machineCode = (opcode << 10) | (r << 8) | immed;
                 }
                 case "RFS" -> machineCode = (opcode << 10) | parseValue(params[0]);
@@ -165,7 +209,12 @@ public class Assembler {
             listingFileLines.forEach(writer::println);
         }
         try (PrintWriter writer = new PrintWriter(new FileWriter(new File(outputDir, "load_file.txt")))) {
-            loadFileMap.forEach((addr, code) -> writer.printf("%06o %s%n", addr, code));
+            // Skip reserved addresses 0-5 when writing the load file so IPL/load starts at 000006
+            loadFileMap.forEach((addr, code) -> {
+                if (addr >= 6) {
+                    writer.printf("%06o %s%n", addr, code);
+                }
+            });
         }
     }
 }

@@ -54,19 +54,19 @@ public class Cache {
         // 1. Check for Cache Hit
         for (int i = 0; i < CACHE_SIZE; i++) {
             if (lines[i].valid && lines[i].tag == tag) {
-                gui.appendToPrinter("-> CACHE HIT (Read) @ " + utils.shortToOctal(address, 4));
+                // gui.appendToPrinter("-> CACHE HIT (Read) @ " + utils.shortToOctal(address, 4));
                 return lines[i].data;
             }
         }
 
         // 2. Cache Miss
-        gui.appendToPrinter("-> CACHE MISS (Read) @ " + utils.shortToOctal(address, 4));
+        // gui.appendToPrinter("-> CACHE MISS (Read) @ " + utils.shortToOctal(address, 4));
         
         // 3. Fetch from Main Memory
         short dataFromMem = mainMemory[address];
 
         // 4. Load into Cache (FIFO Replacement)
-        gui.appendToPrinter("   (Loading mem[" + utils.shortToOctal(address, 4) + "] into cache line " + fifoPointer + ")");
+        // gui.appendToPrinter("   (Loading mem[" + utils.shortToOctal(address, 4) + "] into cache line " + fifoPointer + ")");
         lines[fifoPointer].valid = true;
         lines[fifoPointer].tag = tag;
         lines[fifoPointer].data = dataFromMem;
@@ -93,14 +93,14 @@ public class Cache {
         for (int i = 0; i < CACHE_SIZE; i++) {
             if (lines[i].valid && lines[i].tag == tag) {
                 // 3a. Cache Hit: Update the data in the cache as well.
-                gui.appendToPrinter("-> CACHE HIT (Write) @ " + utils.shortToOctal(address, 4));
+                // gui.appendToPrinter("-> CACHE HIT (Write) @ " + utils.shortToOctal(address, 4));
                 lines[i].data = data;
                 return;
             }
         }
 
         // 3b. Cache Miss (Write-Around): Do nothing. The block is not loaded on a write miss.
-        gui.appendToPrinter("-> CACHE MISS (Write) @ " + utils.shortToOctal(address, 4) + ". (Write-Through only)");
+        // gui.appendToPrinter("-> CACHE MISS (Write) @ " + utils.shortToOctal(address, 4) + ". (Write-Through only)");
     }
 
     /**
