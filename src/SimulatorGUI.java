@@ -573,7 +573,40 @@ public class SimulatorGUI extends JFrame {
         if (fileChooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
             File programFile = fileChooser.getSelectedFile();
             cpu.ipl(programFile); // Pass the selected file to the CPU's IPL process
+            // After IPL, attempt to auto-detect a paragraph/text buffer in memory
+            try {
+                Integer detected = detectParagraphBufferAddress();
+                if (detected != null) {
+                    octalInputField.setText(cpu.getUtils().shortToOctal((short)(detected & 0xFFFF), 6));
+                    appendToPrinter(String.format("Auto-detected probable paragraph start at %04o", detected));
+                } else {
+                    appendToPrinter("No paragraph buffer auto-detected after IPL.");
+                }
+            } catch (Exception ex) {
+                appendToPrinter("Paragraph detection failed: " + ex.getMessage());
+            }
         }
+    }
+
+    /**
+     * Heuristic: scan memory for a run of printable characters (letters, digits, space, punctuation)
+     * of minimum length and return the starting address. Returns null if none found.
+     */
+    private Integer detectParagraphBufferAddress() {
+        final int MIN_RUN = 10; // minimum consecutive printable chars
+        final int MEM_LIMIT = 2048;
+        for (int addr = 0; addr < MEM_LIMIT; addr++) {
+            int run = 0;
+            for (int a = addr; a < MEM_LIMIT; a++) {
+                short val = cpu.peekMemory((short)a);
+                int ch = val & 0xFF;
+                boolean printable = (ch >= 32 && ch <= 126) || ch == 10 || ch == 13 || ch == 9 || ch == 46 || ch == 63; // include '.' and '?'
+                if (printable && ch != 0) { run++; } else { break; }
+            }
+            if (run >= MIN_RUN) return addr;
+            // skip ahead to end of this non-printable run to speed up
+        }
+        return null;
     }
 
     // === NEW: Runtime text loader using octal input as start address ===

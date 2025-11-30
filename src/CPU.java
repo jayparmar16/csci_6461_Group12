@@ -36,6 +36,12 @@ public class CPU {
     private int trapWordNum = 0;                
     private int trapStartAddr = -1;              
     private int trapEndAddr = -1;                
+    // Remember last text loaded via GUI 'Load Text'
+    private int lastLoadedTextStart = -1;
+    private int lastLoadedTextLength = 0;
+    // Diagnostic watch range for paragraph memory (broad by default)
+    private static final int PAR_CANONICAL_START = 64;
+    private static final int PAR_WATCH_END = 500; // inclusive upper scan bound for diagnostic logging
     // ===================================
 
     // Fault Codes
@@ -65,6 +71,41 @@ public class CPU {
         if (DEBUG) System.out.println("\nMachine ready. PC may be set to start address if a program was loaded.");
         if (DEBUG) printRegisterState();
         gui.updateAllDisplays();
+    }
+
+    /**
+     * Report a memory write to GUI/System.out when it touches the paragraph/watch region.
+     * This is a lightweight, temporary diagnostic helper.
+     */
+    private void reportMemWrite(int addr, short val, String context) {
+        int a = addr & 0xFFFF;
+        boolean inWatch = false;
+        if (lastLoadedTextStart >= 0 && lastLoadedTextLength > 0) {
+            if (a >= lastLoadedTextStart && a < lastLoadedTextStart + lastLoadedTextLength) inWatch = true;
+        }
+        if (a >= PAR_CANONICAL_START && a <= PAR_WATCH_END) inWatch = true;
+        if (!inWatch) return;
+        int byteVal = val & 0xFF;
+        char ch = (char) byteVal;
+        String chDisp = Character.isISOControl(ch) ? String.format("\\x%02x", byteVal) : String.valueOf(ch);
+        StackTraceElement[] st = Thread.currentThread().getStackTrace();
+        String caller = (st.length > 3) ? st[3].toString() : "unknown";
+        String msg = String.format("[MEM-WRITE] %s addr=%04o val=%06o char='%s' ctx=%s", Thread.currentThread().getName(), a, val & 0xFFFF, chDisp, context + " caller=" + caller);
+        gui.appendToPrinter(msg);
+        System.out.println(msg);
+    }
+
+    /**
+     * Normalize a token for comparison: strip leading/trailing non-alphanumeric
+     * characters (punctuation) so that words like "outside," compare equal to "outside".
+     */
+    private String normalizeToken(String s) {
+        if (s == null) return "";
+        int st = 0, en = s.length() - 1;
+        while (st <= en && !Character.isLetterOrDigit(s.charAt(st))) st++;
+        while (en >= st && !Character.isLetterOrDigit(s.charAt(en))) en--;
+        if (st > en) return "";
+        return s.substring(st, en + 1);
     }
     
     public void resetMachine() {
@@ -105,6 +146,7 @@ public class CPU {
                         if (address >= 0 && address < memory.length) {
                             // Load directly into main memory, bypassing cache
                             memory[address] = value; 
+                            reportMemWrite(address, memory[address], "loadProgram");
                             if (DEBUG) System.out.printf("Loaded memory[%04o] with value %06o\n", address, value);
                             if (firstAddress == -1) {
                                 firstAddress = (short) address;
@@ -453,7 +495,7 @@ public class CPU {
                             char c = kbdBuffer.charAt(0);
                             kbdBuffer = kbdBuffer.substring(1);
                             if (c == '\n' || c == '\r') { break; }
-                            if (idx < memory.length) { memory[idx++] = (short)(c & 0xFF); }
+                            if (idx < memory.length) { memory[idx] = (short)(c & 0xFF); reportMemWrite(idx, memory[idx], "TRAP2-readword"); idx++; }
                         }
                         gpr[1] = (short)(idx - start);
                         cache.invalidate();
@@ -492,14 +534,19 @@ public class CPU {
                             } else {
                                 if (inWord) {
                                     int len = a - currentStart;
-                                    if (len == wLen) {
-                                        boolean match = true;
-                                        for (int i2 = 0; i2 < len; i2++) {
-                                            char pcChar = (char)(memory[currentStart + i2] & 0xFF);
-                                            if (pcChar != target.charAt(i2)) { match = false; break; }
-                                        }
-                                        if (match) { found = true; break; }
+                                    // Diagnostic: report each discovered word, its sentence and word index
+                                    StringBuilder wordSb = new StringBuilder();
+                                    for (int j = 0; j < len && (currentStart + j) < memory.length; j++) {
+                                        wordSb.append((char)(memory[currentStart + j] & 0xFF));
                                     }
+                                    String foundWord = wordSb.toString();
+                                    String diag = String.format("[TRAP3-DIAG] word='%s' sent=%d wnum=%d start=%04o len=%d", foundWord, sent, wnum, currentStart, len);
+                                    gui.appendToPrinter(diag);
+                                    System.out.println(diag);
+                                    // Compare normalized tokens so punctuation doesn't prevent matches
+                                    String normFound = normalizeToken(foundWord);
+                                    String normTarget = normalizeToken(target);
+                                    if (!normFound.isEmpty() && normFound.equals(normTarget)) { found = true; break; }
                                     inWord = false;
                                 }
                                 if (sentenceEnd) { sent++; wnum = 0; }
@@ -507,14 +554,19 @@ public class CPU {
                         }
                         if (!found && inWord) {
                             int len = end - currentStart;
-                            if (len == wLen) {
-                                boolean match = true;
-                                for (int i2 = 0; i2 < len; i2++) {
-                                    char pcChar = (char)(memory[currentStart + i2] & 0xFF);
-                                    if (pcChar != target.charAt(i2)) { match = false; break; }
-                                }
-                                if (match) { found = true; }
+                            // Diagnostic for trailing word at end of range
+                            StringBuilder tailSb = new StringBuilder();
+                            for (int j = 0; j < len && (currentStart + j) < memory.length; j++) {
+                                tailSb.append((char)(memory[currentStart + j] & 0xFF));
                             }
+                            String tailWord = tailSb.toString();
+                            String tailDiag = String.format("[TRAP3-DIAG] tailWord='%s' sent=%d wnum=%d start=%04o len=%d", tailWord, sent, wnum, currentStart, len);
+                            gui.appendToPrinter(tailDiag);
+                            System.out.println(tailDiag);
+                            // Compare normalized tokens for trailing word
+                            String normTail = normalizeToken(tailWord);
+                            String normTarget = normalizeToken(target);
+                            if (!normTail.isEmpty() && normTail.equals(normTarget)) { found = true; }
                         }
                         if (found) {
                             // Return sentence# in R0 and word# in R1; also print the standard line
@@ -534,6 +586,70 @@ public class CPU {
                         int start = gpr[0] & 0xFFFF;
                         int cap = gpr[1] & 0xFFFF;
                         if (cap <= 0) { gpr[1] = 0; break; }
+                        // Prefer GUI-loaded text if present. The GUI's Load Text writes into memory
+                        // and records `lastLoadedTextStart`/`lastLoadedTextLength` so TRAP can prefer it.
+                        // Diagnostic log of TRAP4 inputs
+                        String lastInfo = (lastLoadedTextStart >= 0) ? String.format("lastLoadedStart=%04o,lastLoadedLen=%d", lastLoadedTextStart, lastLoadedTextLength) : "lastLoaded=none";
+                        gui.appendToPrinter(String.format("TRAP4: start=%04o cap=%d (%s)", start, cap, lastInfo));
+                        if (lastLoadedTextStart >= 0 && lastLoadedTextLength > 0) {
+                            // If program expects the paragraph at the same address the GUI used,
+                            // just use it.
+                            if (start == lastLoadedTextStart) {
+                                // If the GUI loaded text at the exact address the program expects,
+                                // detect the full in-memory length (not capped) and prefer the
+                                // GUI-recorded length if it's longer. Previously we limited the
+                                // scan by `cap` which could miss GUI-loaded text beyond that
+                                // limit and cause TRAP4 to erroneously report a shorter length.
+                                int a3 = start;
+                                while (a3 < memory.length && memory[a3] != 0) { a3++; }
+                                int existingLen = a3 - start;
+                                // Prefer GUI's recorded length when available (the GUI wrote the
+                                // canonical buffer), even if it is larger than the program cap.
+                                int guiLen = lastLoadedTextLength;
+                                int usedLen = Math.max(existingLen, guiLen);
+                                gpr[1] = (short) usedLen;
+                                gui.appendToPrinter(String.format("TRAP4: Using paragraph at %04o, len=%d (memLen=%d, guiLen=%d)", start, usedLen, existingLen, lastLoadedTextLength));
+                                break;
+                            }
+                            // If program expects paragraph somewhere else, consider copying the GUI-loaded
+                            // text into the program's expected buffer. Prefer the GUI-loaded text when it
+                            // is longer than the existing content at `start` (helps avoid truncated prints).
+                            if (start >= 0 && start < memory.length) {
+                                // compute existing length at start
+                                int existingLen = 0;
+                                int a2 = start;
+                                while (a2 < memory.length && existingLen < cap && memory[a2] != 0) { a2++; existingLen++; }
+                                int n = Math.min(cap, lastLoadedTextLength);
+                                // Always copy GUI-loaded text into program buffer when GUI has a recent load.
+                                // This prevents truncation when the GUI-loaded region differs from `start`.
+                                if (n > 0) {
+                                    for (int i2 = 0; i2 < n; i2++) {
+                                        if (start + i2 < memory.length && lastLoadedTextStart + i2 < memory.length) {
+                                            memory[start + i2] = memory[lastLoadedTextStart + i2];
+                                            reportMemWrite(start + i2, memory[start + i2], "TRAP4-copy");
+                                        }
+                                    }
+                                    if (start + n < memory.length) memory[start + n] = 0;
+                                    gpr[1] = (short) n;
+                                    cache.invalidate();
+                                    gui.appendToPrinter(String.format("TRAP4: Copied GUI-loaded paragraph from %04o(len=%d) -> %04o(len=%d)", lastLoadedTextStart, lastLoadedTextLength, start, n));
+                                    break;
+                                }
+                                // otherwise, leave existing content as-is and prefer it below
+                            }
+                            // Otherwise, fall through to check explicit memory at `start`.
+                        }
+                        // If memory at start already contains data (e.g. other preloaded content),
+                        // prefer the in-memory content and avoid overwriting from disk.
+                        if (start >= 0 && start < memory.length && memory[start] != 0) {
+                            int a2 = start;
+                            int wroteExisting = 0;
+                            while (a2 < memory.length && wroteExisting < cap && memory[a2] != 0) { a2++; wroteExisting++; }
+                            gpr[1] = (short) wroteExisting;
+                            gui.appendToPrinter(String.format("TRAP4: Using paragraph already present in memory at %04o, len=%d", start, wroteExisting));
+                            break;
+                        }
+
                         String content = null;
                         try {
                             File f = new File("source.txt");
@@ -569,6 +685,7 @@ public class CPU {
                             for (int i2 = 0; i2 < n; i2++) {
                                 if (start + i2 < memory.length) {
                                     memory[start + i2] = (short)(content.charAt(i2) & 0xFF);
+                                    reportMemWrite(start + i2, memory[start + i2], "TRAP4-filecopy");
                                     wrote++;
                                 } else { break; }
                             }
@@ -593,6 +710,12 @@ public class CPU {
                 if (!checkMemoryFault((short)effectiveAddr)) {
                     // === MODIFIED: Use Cache ===
                     gpr[r] = cache.read((short)effectiveAddr);
+                    // Targeted debug: when loading the saved paragraph length slot (PAR_LEN_SAVED at 242)
+                    if (effectiveAddr == 242) {
+                        short memVal = cache.read((short)effectiveAddr);
+                        gui.appendToPrinter(String.format("DEBUG LDR: Loaded PAR_LEN_SAVED from mem[%04o] -> R%o = %d", effectiveAddr, r, memVal & 0xFFFF));
+                        System.out.println(String.format("DEBUG LDR: Loaded PAR_LEN_SAVED from mem[%04o] -> R%o = %d", effectiveAddr, r, memVal & 0xFFFF));
+                    }
                     // Debug: report loads from data area (129..146)
                     if (DEBUG) {
                         // Log loads from our data regions (old: 129..146, new: 239..251)
@@ -615,6 +738,12 @@ public class CPU {
                     // === MODIFIED: Use Cache ===
                     mbr = gpr[r]; // MBR gets value to be stored
                     cache.write((short)effectiveAddr, mbr);
+                    // Targeted debug: when storing the saved paragraph length slot (PAR_LEN_SAVED at 242)
+                    if (effectiveAddr == 242) {
+                        short memVal = cache.read((short)effectiveAddr);
+                        gui.appendToPrinter(String.format("DEBUG STR: Saved PAR_LEN_SAVED to mem[%04o] <= %d", effectiveAddr, memVal & 0xFFFF));
+                        System.out.println(String.format("DEBUG STR: Saved PAR_LEN_SAVED to mem[%04o] <= %d", effectiveAddr, memVal & 0xFFFF));
+                    }
                     // Debug: if program updates target/best-diff/best-value locations (0201/0202/0203), print a diagnostic
                     // Octal 0201 = decimal 129, 0202 = 130, 0203 = 131
                     // Debug: if program updates candidate/data locations (addresses in data area) print a diagnostic
@@ -1149,6 +1278,9 @@ public class CPU {
     public short getCC() { return cc; }
     public short getMFR() { return mfr; }
     public Utils getUtils() { return utils; }
+    // Expose last GUI-loaded text metadata for debugging/GUI display
+    public int getLastLoadedTextStart() { return lastLoadedTextStart; }
+    public int getLastLoadedTextLength() { return lastLoadedTextLength; }
     
     // Tiny helper: peek memory (via cache) at an absolute address for debugging/tests
     public short peekMemory(short address) {
@@ -1183,18 +1315,33 @@ public class CPU {
                 if (addr >= memory.length) {
                     break; // stop if we run out of memory
                 }
-                memory[addr++] = (short) (ch & 0xFF);
+                memory[addr] = (short) (ch & 0xFF);
+                reportMemWrite(addr, memory[addr], "loadTextIntoMemory");
+                addr++;
                 written++;
             }
         }
         // Append 0 sentinel if there is room
         if (addr < memory.length) {
             memory[addr] = 0;
+            reportMemWrite(addr, memory[addr], "loadTextSentinel");
         }
         // Invalidate cache so GUI/memory view stays consistent
         cache.invalidate();
         // Update displays for immediate visual feedback
         gui.updateAllDisplays();
+        // Record last loaded text region for TRAP4 to prefer GUI-loaded content
+        lastLoadedTextStart = startAddr;
+        lastLoadedTextLength = written;
+        // Inform cache of the watch range so cache writes are also logged
+        cache.setWatchRange(lastLoadedTextStart, lastLoadedTextLength);
+        // If this is the sample paragraph buffer (start 64 / octal 0100), update PAR_LEN_SAVED (mem[242])
+        int PAR_LEN_SAVED_ADDR = 242;
+        if (startAddr == 64 && PAR_LEN_SAVED_ADDR >= 0 && PAR_LEN_SAVED_ADDR < memory.length) {
+            memory[PAR_LEN_SAVED_ADDR] = (short) written;
+            cache.invalidate();
+            gui.appendToPrinter(String.format("GUI: Updated PAR_LEN_SAVED mem[%04o] <= %d", PAR_LEN_SAVED_ADDR, written));
+        }
         return written;
     }
 }
