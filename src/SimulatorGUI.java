@@ -249,7 +249,7 @@ public class SimulatorGUI extends JFrame {
     }
 
     private JPanel createOperationButtonsPanel() {
-        JPanel panel = new JPanel(new GridLayout(2, 4, 8, 8));
+        JPanel panel = new JPanel(new GridLayout(3, 4, 8, 8));
         panel.setBackground(new Color(200, 220, 240));
         
         // Define common button dimensions
@@ -265,7 +265,9 @@ public class SimulatorGUI extends JFrame {
             createOperationButton("Step"),
             createOperationButton("IPL", Color.RED),
             createOperationButton("Store"),
-            createOperationButton("Store+")
+            createOperationButton("Store+"),
+            // === NEW: Runtime text loader ===
+            createOperationButton("Load Text")
         };
         
         for (JButton button : buttons) {
@@ -480,10 +482,10 @@ public class SimulatorGUI extends JFrame {
         consoleInputTextField.addActionListener(e -> {
             String text = consoleInputTextField.getText();
             if (!text.isEmpty()) {
-                // Send the input text to the CPU, appending a trailing space so
-                // the unified parser can finalize the last number without the
-                // user having to type an extra delimiter.
-                cpu.submitConsoleInput(text + " ");
+                // Send the input text to the CPU, appending a newline so
+                // TRAP-based routines can detect end-of-input. Newline also
+                // serves as a delimiter for numeric input flows.
+                cpu.submitConsoleInput(text + "\n");
                 // Clear the input field
                 consoleInputTextField.setText("");
             }
@@ -554,6 +556,10 @@ public class SimulatorGUI extends JFrame {
                     System.out.println("Initializing machine (IPL)");
                     loadProgramFromFile();
                 }
+                case "Load Text" -> {
+                    System.out.println("Runtime load: selecting text file to write into memory");
+                    loadTextIntoMemoryFromFile();
+                }
             }
         } catch (NumberFormatException ex) {
             System.out.println("ERROR: Invalid octal input - " + octalInputField.getText());
@@ -567,6 +573,33 @@ public class SimulatorGUI extends JFrame {
         if (fileChooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
             File programFile = fileChooser.getSelectedFile();
             cpu.ipl(programFile); // Pass the selected file to the CPU's IPL process
+        }
+    }
+
+    // === NEW: Runtime text loader using octal input as start address ===
+    private void loadTextIntoMemoryFromFile() {
+        try {
+            String oct = octalInputField.getText();
+            if (oct == null || oct.trim().isEmpty()) {
+                showError("Start Address Required", "Enter start address (octal) in OCTAL INPUT before loading text.");
+                return;
+            }
+            int startAddr = cpu.getUtils().octalToShort(oct) & 0xFFFF;
+
+            JFileChooser fc = new JFileChooser(".");
+            fc.setDialogTitle("Select Text File to Load into Memory");
+            if (fc.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
+                File file = fc.getSelectedFile();
+                int written = cpu.loadTextIntoMemory(file, startAddr);
+                // Set R0=start address and R1=length for TRAP services
+                cpu.setGPR(0, (short)startAddr);
+                cpu.setGPR(1, (short)written);
+                appendToPrinter(String.format("Loaded %d chars from '%s' into memory[%04o], sentinel at %04o", 
+                    written, file.getName(), startAddr, Math.min(startAddr + written, 2047)));
+                updateAllDisplays();
+            }
+        } catch (Exception ex) {
+            showError("Text Load Error", "Failed to load text: " + ex.getMessage());
         }
     }
 
