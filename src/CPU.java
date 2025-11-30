@@ -28,6 +28,14 @@ public class CPU {
     private volatile boolean isWaitingForInput = false;
     // Tracks whether the CPU was running when it entered a keyboard wait so we can auto-resume
     private boolean wasRunningBeforeWait = false;
+    // === TRAP paragraph search state ===
+    private boolean trapActive = false;          // true while paragraph search TRAP executing phases
+    private int trapPhase = 0;                   // 0=print paragraph,1=read word,2=search,3=done
+    private StringBuilder trapWordBuffer = new StringBuilder(); // collected user word
+    private int trapSentenceNum = 1;            
+    private int trapWordNum = 0;                
+    private int trapStartAddr = -1;              
+    private int trapEndAddr = -1;                
     // ===================================
 
     // Fault Codes
@@ -201,6 +209,67 @@ public class CPU {
         // ===============================================
         ir = mbr;
         
+        // // 2. Increment PC for next instruction
+        // pc++;
+        
+        // // Decode instruction fields (Common Load/Store Format)
+        // int opcode = (ir >>> 10) & 0x3F; // Bits 15-10
+        // int r      = (ir >>> 8)  & 0x3;  // Bits 9-8
+        // int ix     = (ir >>> 6)  & 0x3;  // Bits 7-6
+        // int i      = (ir >>> 5)  & 0x1;  // Bit 5
+        // int address = ir & 0xFF;         // Bits 4-0
+        
+        // // Log instruction details
+        // gui.appendToPrinter("=== Instruction Execution ===");
+        // gui.appendToPrinter(String.format("Location: %06o  Instruction: %06o", mar, ir));
+        // gui.appendToPrinter("Decoded fields (octal):");
+        // gui.appendToPrinter(String.format("  Opcode: %02o", opcode));
+        
+        // // 4. Execute based on opcode
+        // // Effective Address Calculation (only for relevant instructions)
+        // int effectiveAddr = address;
+        
+        // // EA logic is not needed for HLT, RFS, AIR, SIR, MLT, DVD, TRR, AND, ORR, NOT, SRC, RRC, IN, OUT, CHK
+        // // Only calculate EA if it's a memory-addressing instruction
+        // switch(opcode) {
+        //      case 1: // LDR
+        //      case 2: // STR
+        //      case 3: // LDA
+        //      case 4: // AMR
+        //      case 5: // SMR
+        //      case 8: // JZ
+        //      case 9: // JNE
+        //      case 10: // JCC
+        //      case 11: // JMA
+        //      case 12: // JSR
+        //      case 14: // SOB
+        //      case 15: // JGE
+        //      case 33: // LDX
+        //      case 34: // STX
+        //         gui.appendToPrinter(String.format("  R: %o, IX: %o, I: %o, Addr: %o", r, ix, i, address));
+        //         if (ix > 0 && ix < 4) {
+        //             short ixrValue = ixr[ix];
+        //             gui.appendToPrinter(String.format("Using IX%d: base %o + ixr %o", ix, address, ixrValue));
+        //             effectiveAddr += ixrValue;
+        //         }
+
+        //         if (i == 1) { // Indirect Addressing
+        //             if (!checkMemoryFault((short)effectiveAddr)) {
+        //                 gui.appendToPrinter(String.format("Indirect addressing used. Getting final EA from memory[%06o]", effectiveAddr));
+        //                 // === MODIFIED: Use Cache for indirect fetch ===
+        //                 effectiveAddr = cache.read((short)effectiveAddr);
+        //                 // ============================================
+        //             } else {
+        //                 return; // Fault occurred
+        //             }
+        //         }
+        //         System.out.printf("Final Effective Address: %06o\n", effectiveAddr);
+        //         break;
+        //      default:
+        //         // This instruction doesn't use the standard R,IX,I,Addr format
+        //         break;
+        // }
+
         // 2. Increment PC for next instruction
         pc++;
 
@@ -260,11 +329,273 @@ public class CPU {
                 halt();
                 break;
                 
+
+            // ISA Opcode for TRAP is 30 octal = 24 decimal
+            case 24: // TRAP - Multi-service
+            {
+                int serviceId = address & 0xFF;
+                switch (serviceId) {
+                    case 0: {
+                        // Legacy single-service: print paragraph (R0 sentinel-terminated), prompt, read, search
+                        // Kept for backward compatibility
+                        // R0 expected to contain start address of paragraph (sentinel 0 terminated)
+                        if (!trapActive) {
+                            trapActive = true;
+                            trapPhase = 0;
+                            trapWordBuffer.setLength(0);
+                            trapSentenceNum = 1;
+                            trapWordNum = 0;
+                            trapStartAddr = gpr[0] & 0xFFFF;
+                            trapEndAddr = trapStartAddr;
+                            while (trapEndAddr < memory.length && memory[trapEndAddr] != 0) {
+                                trapEndAddr++;
+                            }
+                        }
+                        if (trapPhase == 0) {
+                            for (int addr2 = trapStartAddr; addr2 < trapEndAddr; addr2++) {
+                                char c = (char)(memory[addr2] & 0xFF);
+                                gui.printToConsole(String.valueOf(c));
+                            }
+                            gui.printToConsole("\n?");
+                            trapPhase = 1;
+                            pc--; return;
+                        }
+                        if (trapPhase == 1) {
+                            if (kbdBuffer.isEmpty()) {
+                                wasRunningBeforeWait = (runWorker != null && !runWorker.isDone());
+                                isWaitingForInput = true;
+                                pc--; return;
+                            }
+                            char c = kbdBuffer.charAt(0);
+                            kbdBuffer = kbdBuffer.substring(1);
+                            if (c == '\n' || c == '\r') {
+                                while (trapWordBuffer.length() > 0 && trapWordBuffer.charAt(trapWordBuffer.length()-1) == ' ') {
+                                    trapWordBuffer.setLength(trapWordBuffer.length()-1);
+                                }
+                                trapPhase = 2;
+                            } else {
+                                trapWordBuffer.append(c);
+                            }
+                            pc--; return;
+                        }
+                        if (trapPhase == 2) {
+                            String targetWord = trapWordBuffer.toString().trim();
+                            if (targetWord.isEmpty()) {
+                                gui.printToConsole("\nNOTFOUND");
+                                trapPhase = 3; break;
+                            }
+                            boolean inWord = false;
+                            int currentWordStart = -1;
+                            trapSentenceNum = 1; trapWordNum = 0;
+                            for (int a = trapStartAddr; a < trapEndAddr; a++) {
+                                char c = (char)(memory[a] & 0xFF);
+                                boolean delim = (c == ' ' || c == '\n' || c == '\r' || c == '\t');
+                                boolean sentenceEnd = (c == '.');
+                                if (!delim && !sentenceEnd) {
+                                    if (!inWord) { inWord = true; currentWordStart = a; trapWordNum++; }
+                                } else {
+                                    if (inWord) {
+                                        int len = a - currentWordStart;
+                                        if (len == targetWord.length()) {
+                                            boolean match = true;
+                                            for (int i2 = 0; i2 < len; i2++) {
+                                                char pcChar = (char)(memory[currentWordStart + i2] & 0xFF);
+                                                if (pcChar != targetWord.charAt(i2)) { match = false; break; }
+                                            }
+                                            if (match) { gui.printToConsole("\n" + targetWord + " " + trapSentenceNum + " " + trapWordNum); trapPhase = 3; break; }
+                                        }
+                                        inWord = false;
+                                    }
+                                    if (sentenceEnd) { trapSentenceNum++; trapWordNum = 0; }
+                                }
+                            }
+                            if (trapPhase != 3) {
+                                if (inWord) {
+                                    int len = trapEndAddr - currentWordStart;
+                                    if (len == targetWord.length()) {
+                                        boolean match = true;
+                                        for (int i2 = 0; i2 < len; i2++) {
+                                            char pcChar = (char)(memory[currentWordStart + i2] & 0xFF);
+                                            if (pcChar != targetWord.charAt(i2)) { match = false; break; }
+                                        }
+                                        if (match) { gui.printToConsole("\n" + targetWord + " " + trapSentenceNum + " " + trapWordNum); trapPhase = 3; }
+                                    }
+                                }
+                                if (trapPhase != 3) { gui.printToConsole("\nNOTFOUND"); trapPhase = 3; }
+                            }
+                            if (trapPhase != 3) { pc--; return; }
+                            break;
+                        }
+                        if (trapPhase == 3) { trapActive = false; trapPhase = 0; }
+                        break;
+                    }
+                    case 1: {
+                        // Print memory from R0 for R1 bytes
+                        int start = gpr[0] & 0xFFFF;
+                        int len = gpr[1] & 0xFFFF;
+                        int end = Math.min(memory.length, start + len);
+                        for (int a = start; a < end; a++) {
+                            char c = (char)(memory[a] & 0xFF);
+                            gui.printToConsole(String.valueOf(c));
+                        }
+                        break;
+                    }
+                    case 2: {
+                        // Read a word into memory at R0; stop at newline; return R1=len
+                        if (kbdBuffer.indexOf("\n") == -1 && kbdBuffer.indexOf("\r") == -1) {
+                            wasRunningBeforeWait = (runWorker != null && !runWorker.isDone());
+                            isWaitingForInput = true;
+                            pc--; return;
+                        }
+                        int start = gpr[0] & 0xFFFF;
+                        int idx = start;
+                        while (!kbdBuffer.isEmpty()) {
+                            char c = kbdBuffer.charAt(0);
+                            kbdBuffer = kbdBuffer.substring(1);
+                            if (c == '\n' || c == '\r') { break; }
+                            if (idx < memory.length) { memory[idx++] = (short)(c & 0xFF); }
+                        }
+                        gpr[1] = (short)(idx - start);
+                        cache.invalidate();
+                        break;
+                    }
+                    case 3: {
+                        // Search paragraph: R0=start, R1=len, R2=wordStart, R3=wordLen
+                        int pStart = gpr[0] & 0xFFFF;
+                        int pLen = gpr[1] & 0xFFFF;
+                        int wStart = gpr[2] & 0xFFFF;
+                        int wLen = gpr[3] & 0xFFFF;
+                        // Build target word string
+                        StringBuilder w = new StringBuilder();
+                        for (int i2 = 0; i2 < wLen && (wStart + i2) < memory.length; i2++) {
+                            w.append((char)(memory[wStart + i2] & 0xFF));
+                        }
+                        String target = w.toString();
+                        gui.appendToPrinter("[TRAP3] target='" + target + "' len=" + wLen);
+                        if (target.isEmpty()) { gpr[0] = 0; gpr[1] = 0; break; }
+                        int sent = 1; int wnum = 0;
+                        boolean inWord = false; int currentStart = -1;
+                        int end = Math.min(memory.length, pStart + pLen);
+                        if (pLen <= 0) {
+                            int a2 = pStart;
+                            while (a2 < memory.length && memory[a2] != 0) a2++;
+                            end = a2;
+                        }
+                        gui.appendToPrinter("[TRAP3] range=" + pStart + ".." + end);
+                        boolean found = false;
+                        for (int a = pStart; a < end; a++) {
+                            char c = (char)(memory[a] & 0xFF);
+                            boolean delim = (c == ' ' || c == '\n' || c == '\r' || c == '\t');
+                            boolean sentenceEnd = (c == '.');
+                            if (!delim && !sentenceEnd) {
+                                if (!inWord) { inWord = true; currentStart = a; wnum++; }
+                            } else {
+                                if (inWord) {
+                                    int len = a - currentStart;
+                                    if (len == wLen) {
+                                        boolean match = true;
+                                        for (int i2 = 0; i2 < len; i2++) {
+                                            char pcChar = (char)(memory[currentStart + i2] & 0xFF);
+                                            if (pcChar != target.charAt(i2)) { match = false; break; }
+                                        }
+                                        if (match) { found = true; break; }
+                                    }
+                                    inWord = false;
+                                }
+                                if (sentenceEnd) { sent++; wnum = 0; }
+                            }
+                        }
+                        if (!found && inWord) {
+                            int len = end - currentStart;
+                            if (len == wLen) {
+                                boolean match = true;
+                                for (int i2 = 0; i2 < len; i2++) {
+                                    char pcChar = (char)(memory[currentStart + i2] & 0xFF);
+                                    if (pcChar != target.charAt(i2)) { match = false; break; }
+                                }
+                                if (match) { found = true; }
+                            }
+                        }
+                        if (found) {
+                            // Return sentence# in R0 and word# in R1; also print the standard line
+                            gpr[0] = (short) sent;
+                            gpr[1] = (short) wnum;
+                            gui.printToConsole("\n" + target + " " + sent + " " + wnum);
+                        } else {
+                            gpr[0] = 0; gpr[1] = 0;
+                            gui.printToConsole("\nNOTFOUND");
+                        }
+                        break;
+                    }
+                    case 4: {
+                        // Load paragraph from default file into memory
+                        // Inputs: R0=start addr, R1=max bytes
+                        // Output: R1=actual bytes loaded; zero-terminate if space remains
+                        int start = gpr[0] & 0xFFFF;
+                        int cap = gpr[1] & 0xFFFF;
+                        if (cap <= 0) { gpr[1] = 0; break; }
+                        String content = null;
+                        try {
+                            File f = new File("source.txt");
+                            if (!f.exists()) {
+                                f = new File("..\\source.txt");
+                            }
+                            if (!f.exists()) {
+                                // Fallback: test.txt
+                                f = new File("test.txt");
+                                if (!f.exists()) f = new File("..\\test.txt");
+                            }
+                            if (f.exists()) {
+                                StringBuilder sb = new StringBuilder();
+                                try (BufferedReader br = new BufferedReader(new FileReader(f))) {
+                                    String line;
+                                    boolean first = true;
+                                    while ((line = br.readLine()) != null) {
+                                        if (!first) sb.append('\n');
+                                        sb.append(line);
+                                        first = false;
+                                    }
+                                }
+                                content = sb.toString();
+                            } else {
+                                content = ""; // no file found -> empty
+                            }
+                        } catch (IOException ioe) {
+                            content = "";
+                        }
+                        int wrote = 0;
+                        if (content != null) {
+                            int n = Math.min(cap, content.length());
+                            for (int i2 = 0; i2 < n; i2++) {
+                                if (start + i2 < memory.length) {
+                                    memory[start + i2] = (short)(content.charAt(i2) & 0xFF);
+                                    wrote++;
+                                } else { break; }
+                            }
+                            // Zero-terminate if space remains and memory not exceeded
+                            if (start + wrote < memory.length && wrote < cap) {
+                                memory[start + wrote] = 0;
+                            }
+                        }
+                        gpr[1] = (short) wrote;
+                        cache.invalidate();
+                        break;
+                    }
+                    default: {
+                        gui.appendToPrinter("Warning: Unknown TRAP service " + serviceId);
+                        break;
+                    }
+                }
+                break;
+            }
+
             case 1: // LDR
                 if (!checkMemoryFault((short)effectiveAddr)) {
+                    // === MODIFIED: Use Cache ===
                     gpr[r] = cache.read((short)effectiveAddr);
                     // Debug: report loads from data area (129..146)
                     if (DEBUG) {
+                        // Log loads from our data regions (old: 129..146, new: 239..251)
                         if ((effectiveAddr >= 129 && effectiveAddr <= 146) || (effectiveAddr >= 239 && effectiveAddr <= 251)) {
                             short memVal = cache.read((short)effectiveAddr);
                             int byteVal = memVal & 0xFF;
@@ -281,6 +612,7 @@ public class CPU {
                 
             case 2: // STR
                 if (!checkMemoryFault((short)effectiveAddr)) {
+                    // === MODIFIED: Use Cache ===
                     mbr = gpr[r]; // MBR gets value to be stored
                     cache.write((short)effectiveAddr, mbr);
                     // Debug: if program updates target/best-diff/best-value locations (0201/0202/0203), print a diagnostic
@@ -308,14 +640,18 @@ public class CPU {
 
             case 4: // AMR - Add Memory to Register
                 if (!checkMemoryFault((short)effectiveAddr)) {
+                    // === MODIFIED: Use Cache ===
                     mbr = cache.read((short)effectiveAddr);
+                    // ===========================
                     gpr[r] += mbr;
                 }
                 break;
 
             case 5: // SMR - Subtract Memory from Register
                 if (!checkMemoryFault((short)effectiveAddr)) {
+                    // === MODIFIED: Use Cache ===
                     mbr = cache.read((short)effectiveAddr);
+                    // ===========================
                     gpr[r] -= mbr;
                 }
                 break;
@@ -526,9 +862,7 @@ public class CPU {
                 }
                 break;
 
-            case 24: // TRAP
-                throw new Exception("TRAP instruction not yet implemented");
-
+            // === NEW: I/O Instruction Implementation ===
             
             // ISA Opcode for IN is 61 octal = 49 decimal
             case 49: // IN - Input from Device
@@ -636,7 +970,7 @@ public class CPU {
                 // execution falls through into the data segment after program end.
                 mfr = FAULT_ILLEGAL_OPCODE;
                 // Back up PC so repeated Run/Step won't keep advancing into data
-                pc--; 
+                pc--; // pc was pre-incremented after fetch
                 String msg = String.format("Unimplemented or Illegal Instruction - Opcode: %02o at PC=%06o IR=%06o", opcode, pc, ir);
                 gui.appendToPrinter("ERROR: " + msg + " — Halting.");
                 System.err.println(msg);
@@ -646,10 +980,12 @@ public class CPU {
                 return;
         }
         
+        // Update GUI and logs *after* successful execution
         updateDisplayAndLog();
     }
 
     public void runProgram() {
+        // === MODIFIED: Don't run if waiting for input ===
         if (isWaitingForInput) {
              gui.appendToPrinter("Machine is waiting for input. Cannot run.");
              return;
@@ -774,6 +1110,7 @@ public class CPU {
         return false;
     }
 
+    // === NEW: Getter for formatted cache content ===
     public String getFormattedCache() {
         return cache.getFormattedCache();
     }
@@ -826,6 +1163,40 @@ public class CPU {
     public void setMAR(short value) { mar = value; }
     public void setMBR(short value) { mbr = value; }
     public void setIR(short value) { ir = value; }
+
+    /**
+     * Load a text file into main memory starting at the given address.
+     * Each character is stored in the low 8 bits of a memory word.
+     * Writes a trailing 0 sentinel after the last character (if space permits).
+     * Returns the number of characters written.
+     */
+    public int loadTextIntoMemory(File file, int startAddr) throws IOException {
+        if (file == null) throw new IOException("File is null");
+        if (startAddr < 0 || startAddr >= memory.length) {
+            throw new IOException("Start address out of bounds: " + startAddr);
+        }
+        int addr = startAddr;
+        int written = 0;
+        try (BufferedReader br = new BufferedReader(new FileReader(file))) {
+            int ch;
+            while ((ch = br.read()) != -1) {
+                if (addr >= memory.length) {
+                    break; // stop if we run out of memory
+                }
+                memory[addr++] = (short) (ch & 0xFF);
+                written++;
+            }
+        }
+        // Append 0 sentinel if there is room
+        if (addr < memory.length) {
+            memory[addr] = 0;
+        }
+        // Invalidate cache so GUI/memory view stays consistent
+        cache.invalidate();
+        // Update displays for immediate visual feedback
+        gui.updateAllDisplays();
+        return written;
+    }
 }
 
 /**
