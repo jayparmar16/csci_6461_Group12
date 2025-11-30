@@ -2,11 +2,10 @@ import java.io.*;
 import java.util.*;
 
 /**
- * two-pass assembler for the C6461 computer architecture.
+ * A self-contained, two-pass assembler for the C6461 computer architecture.
  * This class is used to convert assembly source files into machine-loadable code.
  */
 public class Assembler {
-    
     private final Map<String, Integer> symbolTable = new HashMap<>();
     private final List<String> sourceLines = new ArrayList<>();
     private final TreeMap<Integer, String> loadFileMap = new TreeMap<>();
@@ -47,7 +46,7 @@ public class Assembler {
                 List<String> tokens = new ArrayList<>(Arrays.asList(cleanLine.split("\\s+")));
                 tokens.removeIf(String::isEmpty);
                 if (tokens.isEmpty()) continue; // robust: skip whitespace-only or odd unicode whitespace lines
-                
+
                 String label = null;
                 if (tokens.get(0).endsWith(":")) {
                     label = tokens.get(0).substring(0, tokens.get(0).length() - 1);
@@ -58,6 +57,7 @@ public class Assembler {
 
                 String instruction = tokens.get(0).toUpperCase();
                 if ("LOC".equals(instruction)) {
+                    // Be robust if operand is missing
                     if (tokens.size() >= 2) {
                         locationCounter = Integer.parseInt(tokens.get(1));
                     }
@@ -94,6 +94,7 @@ public class Assembler {
                 String operands = tokens.size() > 1? String.join(",", tokens.subList(1, tokens.size())) : "";
 
                 if ("LOC".equals(instruction)) {
+                    // Be robust if operand is missing
                     String ops = operands.trim();
                     if (!ops.isEmpty()) {
                         locationCounter = Integer.parseInt(ops.split(",")[0]);
@@ -111,6 +112,7 @@ public class Assembler {
                 }
                 locationCounter++;
             } catch (Exception ex) {
+                // Skip malformed line quietly in pass 2
                 listingFileLines.add(String.format("              %s", originalLine));
                 continue;
             }
@@ -126,23 +128,23 @@ public class Assembler {
             int machineCode;
             switch (instruction) {
                 case "LDR", "STR", "LDA", "AMR", "SMR", "JZ", "JNE", "JCC", "SOB", "JGE", "JMA", "JSR" -> {
-                        // Parse operands robustly: expect (R, [IX,] ADDRESS) but support shorter forms.
-                        int r = 0;
-                        int address = 0;
-                        if (params.length == 1) {
-                            // Form: ADDRESS (r defaults to 0)
-                            address = parseValue(params[0]);
-                        } else if (params.length >= 2) {
-                            // Form: R, ADDRESS (ignore IX for these instructions)
-                            r = parseValue(params[0]);
-                            address = parseValue(params[1]);
-                        }
-                        // Range check: this instruction encodes an 8-bit address field
-                        if ((address & ~0xFF) != 0) {
-                            System.err.println(String.format("Assembly ERROR: address out of range for %s -> %d (must fit 8 bits).", instruction, address));
-                            return null;
-                        }
-                        machineCode = (opcode << 10) | (r << 8) | (address & 0xFF);
+                    // Parse operands robustly: expect (R, [IX,] ADDRESS) but support shorter forms.
+                    int r = 0;
+                    int address = 0;
+                    if (params.length == 1) {
+                        // Form: ADDRESS (r defaults to 0)
+                        address = parseValue(params[0]);
+                    } else if (params.length >= 2) {
+                        // Form: R, ADDRESS (ignore IX for these instructions)
+                        r = parseValue(params[0]);
+                        address = parseValue(params[1]);
+                    }
+                    // Range check: this instruction encodes an 8-bit address field
+                    if ((address & ~0xFF) != 0) {
+                        System.err.println(String.format("Assembly ERROR: address out of range for %s -> %d (must fit 8 bits).", instruction, address));
+                        return null;
+                    }
+                    machineCode = (opcode << 10) | (r << 8) | (address & 0xFF);
                 }
                 case "LDX", "STX" -> {
                     int ix = parseValue(params[0]);
@@ -166,6 +168,18 @@ public class Assembler {
                     machineCode = (opcode << 10) | (r << 8) | immed;
                 }
                 case "RFS" -> machineCode = (opcode << 10) | parseValue(params[0]);
+                case "TRAP" -> {
+                    // Encode TRAP with an 8-bit service id in the address field
+                    int service = 0;
+                    if (params.length >= 1) {
+                        service = parseValue(params[0]);
+                    }
+                    if ((service & ~0xFF) != 0) {
+                        System.err.println(String.format("Assembly ERROR: TRAP service out of range -> %d (must fit 8 bits).", service));
+                        return null;
+                    }
+                    machineCode = (opcode << 10) | (service & 0xFF);
+                }
                 case "MLT", "DVD", "TRR", "AND", "ORR" -> {
                     int rx = parseValue(params[0]);
                     int ry = parseValue(params[1]);
